@@ -1,0 +1,44 @@
+---
+title: "Quarto Basics"
+format:
+  html:
+    code-fold: true
+jupyter: python3
+---
+
+For a demonstration of a line plot on a polar axis, see @fig-polar.
+
+```{r setup}
+library(tidyverse)
+parcel_sales_csv <- "_box_data/Cook County 2023/Assessor_-_Parcel_Sales_May2_23.csv" 
+assessment_roll_csv <- "_box_data/Cook County 2023/Assessor_-_Historic_Assessed_Values_May1_23.csv" 
+
+```
+
+```{r}
+parcel_sales <- read_csv(parcel_sales_csv)
+
+parcel_sales <- parcel_sales %>%
+    mutate(single_fam = ifelse(class %in% c("202", "203", "204", "205", "206", "207", "208", "209", "210", "234", "278", "295"), 1, 0)) %>%
+    mutate(multi_fam = ifelse(class %in% c("211", "212"), 1, 0)) %>%
+    mutate(condo = ifelse(class == 299, 1, 0)) %>%
+    mutate(regression_class = ifelse(single_fam == 1 | multi_fam == 1 | condo == 1, 1, 0)) %>%
+    filter(regression_class == 1) %>%
+    filter(year >= 2011) %>%
+    filter(year != 2023) %>%
+    distinct(year, pin, .keep_all = TRUE) %>%
+    mutate(pin14 = sprintf("%014.0f", pin)) %>%
+    select(-c(sale_seller_name, sale_buyer_name))
+
+
+assessment_roll <- read_csv(assessment_roll_csv)
+
+assessment_roll <- assessment_roll %>%
+    filter(tax_year >= 2010) %>%
+    filter(tax_year != 2023) %>%
+    rename(pin14 = pin) %>%
+    mutate(year = tax_year)
+
+sales_assessment_joined <- inner_join(parcel_sales, assessment_roll, by = join_by(pin14, year))
+
+```
