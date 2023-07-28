@@ -10,14 +10,19 @@ For a demonstration of a line plot on a polar axis, see @fig-polar.
 
 ```{r setup}
 library(tidyverse)
-parcel_sales_csv <- "_box_data/Cook County 2023/Assessor_-_Parcel_Sales_May2_23.csv" 
-assessment_roll_csv <- "_box_data/Cook County 2023/Assessor_-_Historic_Assessed_Values_May1_23.csv" 
-
+library(assertthat)
+parcel_sales_csv <- "_box_data/Cook County 2023/Assessor_-_Parcel_Sales_May2_23.csv"
+assessment_roll_csv <- "_box_data/Cook County 2023/Assessor_-_Historic_Assessed_Values_May1_23.csv"
+tax_bills_csv <- "_box_data/Cook County 2023/tax_bills from ptaxsim_pin.csv"
 ```
 
-```{r}
+```{r read-files}
 parcel_sales <- read_csv(parcel_sales_csv)
+assessment_roll <- read_csv(assessment_roll_csv)
+# tax_bills <- read_csv(tax_bills_csv) ## Not being used?
+```
 
+```{r create-metrics}
 parcel_sales <- parcel_sales %>%
     mutate(single_fam = ifelse(class %in% c("202", "203", "204", "205", "206", "207", "208", "209", "210", "234", "278", "295"), 1, 0)) %>%
     mutate(multi_fam = ifelse(class %in% c("211", "212"), 1, 0)) %>%
@@ -30,15 +35,51 @@ parcel_sales <- parcel_sales %>%
     mutate(pin14 = sprintf("%014.0f", pin)) %>%
     select(-c(sale_seller_name, sale_buyer_name))
 
-
-assessment_roll <- read_csv(assessment_roll_csv)
-
 assessment_roll <- assessment_roll %>%
     filter(tax_year >= 2010) %>%
     filter(tax_year != 2023) %>%
     rename(pin14 = pin) %>%
     mutate(year = tax_year)
 
+#### comment copied from Chris's stata file ####
+# * is this right? seems yes based on email from Dan S */
+
+# 	* Note to self: The 2021 reassessments will affect the property tax bill issued in the summer of 2022.  https://prodassets.cookcountyassessor.com/s3fs-public/page_comm/Reassessment%20Notice_Graphic.png?utm_medium=email&utm_source=govdelivery
+
+# 	The tax year is the year in which properties are assessed and reflects the value of the property as of January 1 of the same year.
+# 	https://www.civicfed.org/civic-federation/blog/understanding-first-installment-property-tax-bill
+
+# 	2021 taxes are paid in 2022
+
 sales_assessment_joined <- inner_join(parcel_sales, assessment_roll, by = join_by(pin14, year))
+
+## left join w township code
+
+sales_assessment_joined <- sales_assessment_joined %>%
+    mutate(aratio_mailed = mailed_tot / sale_price) %>%
+    mutate(aratio_certified = certified_tot / sale_price) %>%
+    mutate(aratio_board = board_tot / sale_price)
+
+assert_that(are_equal(sales_assessment_joined$township_code.x, sales_assessment_joined$township_code.y), msg = "Mismatch in township codes!")
+
+sales_assessment_joined <- sales_assessment_joined %>%
+    mutate(township_code = township_code.x)
+
+sales_assessment_joined <- sales_assessment_joined %>%
+    group_by(township_code) %>%
+    reframe(enframe(quantile(aratio_mailed, c(seq(0.01, 0.05, 0.01), 0.25, 0.75, seq(0.95, 0.99, 0.01)), na.rm = TRUE))) %>%
+    pivot_wider(id_cols = township_code) %>%
+    right_join(sales_assessment_joined, by = join_by(township_code)) %>%
+    mutate(p75_ratio = `75%`) %>%
+    mutate(p25_ratio = `25%`) %>%
+    mutate(ratio_iqr = p75_ratio - p25_ratio) %>%
+    mutate(outlier = ifelse(sale_price < 10000, -99, 0)) %>%
+    mutate(outlier = ifelse(aratio_mailed > p75_ratio + 1.5 * ratio_iqr, 1, 0)) %>%
+    mutate(outlier = ifelse(aratio_mailed < p25_ratio - 1.5 * ratio_iqr, -1, 0)) %>%
+    mutate(trimmed_aratio1 = ifelse(aratio_mailed < `1%` | aratio_mailed > `99%`, 0, 1)) %>%
+    mutate(trimmed_aratio2 = ifelse(aratio_mailed < `2%` | aratio_mailed > `98%`, 0, 1)) %>%
+    mutate(trimmed_aratio3 = ifelse(aratio_mailed < `3%` | aratio_mailed > `97%`, 0, 1)) %>%
+    mutate(trimmed_aratio4 = ifelse(aratio_mailed < `4%` | aratio_mailed > `96%`, 0, 1)) %>%
+    mutate(trimmed_aratio5 = ifelse(aratio_mailed < `5%` | aratio_mailed > `95%`, 0, 1))
 
 ```
