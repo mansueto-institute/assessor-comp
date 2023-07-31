@@ -62,20 +62,26 @@ sales_assessment_joined <- sales_assessment_joined %>%
 
 assert_that(are_equal(sales_assessment_joined$township_code.x, sales_assessment_joined$township_code.y), msg = "Mismatch in township codes!")
 
-sales_assessment_joined <- sales_assessment_joined %>%
-    mutate(township_code = township_code.x)
+assert_that(are_equal(sales_assessment_joined$class.x, sales_assessment_joined$class.y), msg = "Mismatch in class codes!")
 
 sales_assessment_joined <- sales_assessment_joined %>%
-    group_by(township_code) %>%
+    mutate(township_code = township_code.x) %>%
+    mutate(class = class.x)
+
+sales_assessment_joined <- sales_assessment_joined %>%
+    group_by(township_code, class, year) %>%
     reframe(enframe(quantile(aratio_mailed, c(seq(0.01, 0.05, 0.01), 0.25, 0.75, seq(0.95, 0.99, 0.01)), na.rm = TRUE))) %>%
-    pivot_wider(id_cols = township_code) %>%
-    right_join(sales_assessment_joined, by = join_by(township_code)) %>%
+    pivot_wider(id_cols = c(township_code, class, year)) %>% 
+    right_join(sales_assessment_joined, by = join_by(township_code, class, year)) %>%
     mutate(p75_ratio = `75%`) %>%
     mutate(p25_ratio = `25%`) %>%
     mutate(ratio_iqr = p75_ratio - p25_ratio) %>%
-    mutate(outlier = ifelse(sale_price < 10000, -99, 0)) %>%
-    mutate(outlier = ifelse(aratio_mailed > p75_ratio + 1.5 * ratio_iqr, 1, 0)) %>%
-    mutate(outlier = ifelse(aratio_mailed < p25_ratio - 1.5 * ratio_iqr, -1, 0)) %>%
+    mutate(outlier_case_when = case_when(
+        sale_price < 10000 ~ -99,
+        aratio_mailed > p75_ratio + 1.5 * ratio_iqr ~ 1,
+        aratio_mailed < p25_ratio - 1.5 * ratio_iqr ~ -1,
+        .default = 0
+    )) %>%
     mutate(trimmed_aratio1 = ifelse(aratio_mailed < `1%` | aratio_mailed > `99%`, 0, 1)) %>%
     mutate(trimmed_aratio2 = ifelse(aratio_mailed < `2%` | aratio_mailed > `98%`, 0, 1)) %>%
     mutate(trimmed_aratio3 = ifelse(aratio_mailed < `3%` | aratio_mailed > `97%`, 0, 1)) %>%
