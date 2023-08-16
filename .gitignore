@@ -1,1 +1,5 @@
 _box_data/
+.DS_Store
+viz/
+data/
+.vscode/
