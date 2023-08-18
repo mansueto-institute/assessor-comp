@@ -90,7 +90,8 @@ sales_data <- sales_data %>%
 
 # Property tax bills and assessments
 ptaxsim_db_conn <- DBI::dbConnect(RSQLite::SQLite(), "/Users/divijsinha/Library/CloudStorage/Box-Box/Cook County 2023/ptaxsim-2021.0.4.db/ptaxsim-2021.0.4.db")
-ptax_data <- dbGetQuery(ptaxsim_db_conn, "SELECT year, pin, tax_code_num, class, tax_bill_total, av_mailed, av_certified, av_board, av_clerk FROM pin where year >= 2011")
+ptax_data <- dbGetQuery(ptaxsim_db_conn, "SELECT year, pin, tax_code_num, class, tax_bill_total, av_mailed, av_certified, av_board, av_clerk FROM pin where year >= 2011") %>% as_tibble()
+
 
 # class_data <- read_csv('https://raw.githubusercontent.com/ccao-data/ccao/master/data-raw/class_dict.csv')
 # Source: https://prodassets.cookcountyassessor.com/s3fs-public/form_documents/classcode.pdf
@@ -111,27 +112,51 @@ class_data_regression_only <- class_data %>%
 # Source: https://datacatalog.cookcountyil.gov/GIS-Maps/Historical-ccgisdata-Political-Township-2016/uvx8-ftf4
 townships <- ccao::town_shp %>% st_make_valid()
 
+# PTAX summary
+
+ptax_class_year_summary <- ptax_data %>%
+  filter(year >= 2011 & year <= 2022) %>%
+  inner_join(., class_data, by = c("class" = "class_code")) %>%
+  group_by(year, major_class_type) %>%
+  summarise(pin_total_count = n(), av_board_sum = sum(av_board)) %>%
+  ungroup()
+
+ptax_class_year_triad_summary <- ptax_data %>%
+  filter(year >= 2011 & year <= 2022) %>%
+  inner_join(., class_data, by = c("class" = "class_code")) %>%
+  mutate(township_code = str_sub(tax_code_num, start = 1L, end = 2L)) %>%
+  left_join(
+    .,
+    townships %>% st_drop_geometry() %>% select(township_code, triad_name),
+    join_by(township_code == township_code)
+  ) %>%
+  group_by(year, major_class_type, triad_name) %>%
+  summarise(pin_total_count = n(), av_board_sum = sum(av_board)) %>%
+  ungroup()
+
 # Appeals
 parcel_appeals <- read_parquet("data/BoR_-_Parcel_Appeals.parquet") %>%
   filter(tax_year >= 2011) %>%
-  mutate(regression_class = ifelse(Class %in% class_data_regression_only$class_code, TRUE, FALSE))
+  filter(Class != 0)
+
+# THIS SHOULD ALWAYS BE EMPTY
+# parcel_appeals %>% filter((Class >= 1000) & (Class <= 9999))
+
+parcel_appeals <- parcel_appeals %>%
+  mutate(class_char = ifelse(Class >= 1000, Class / 100, Class)) %>%
+  mutate(class_char = as.character(class_char)) %>%
+  inner_join(., class_data, join_by(class_char == class_code))
 
 appeals_summary <- parcel_appeals %>%
-  group_by(tax_year, regression_class, Result) %>%
+  group_by(tax_year, major_class_type, Result) %>%
   summarise(
     count = n(),
     assessor_total = sum(Assessor_TotalValue),
     bor_total = sum(BOR_TotalValue)
   ) %>%
   ungroup() %>%
-  inner_join(
-    .,
-    ptax_data %>%
-      filter(year >= 2011 & year <= 2022) %>%
-      inner_join(., class_data, by = c("class" = "class_code")) %>%
-      group_by(year, regression_class) %>%
-      summarise(pin_total_count = n()),
-    join_by(tax_year == year, regression_class == regression_class)
+  full_join(
+    ., ptax_class_year_summary, join_by(tax_year == year, major_class_type)
   ) %>%
   mutate(ratio = count / pin_total_count)
 
@@ -139,34 +164,20 @@ appeals_summary_by_triad <- parcel_appeals %>%
   mutate(township_code = as.character(township_code)) %>%
   left_join(
     .,
-    townships %>%
-      st_drop_geometry() %>%
-      select(township_code, triad_name),
+    townships %>% st_drop_geometry() %>% select(township_code, triad_name),
     join_by(township_code == township_code)
   ) %>%
-  group_by(tax_year, regression_class, Result, triad_name) %>%
+  group_by(tax_year, major_class_type, Result, triad_name) %>%
   summarise(
     count = n(),
     assessor_total = sum(Assessor_TotalValue),
     bor_total = sum(BOR_TotalValue)
   ) %>%
   ungroup() %>%
-  right_join(
+  full_join(
     .,
-    ptax_data %>%
-      filter(year >= 2011 & year <= 2022) %>%
-      inner_join(., class_data, by = c("class" = "class_code")) %>%
-      mutate(township_code = str_sub(tax_code_num, start = 1L, end = 2L)) %>%
-      left_join(
-        .,
-        townships %>%
-          st_drop_geometry() %>%
-          select(township_code, triad_name),
-        join_by(township_code == township_code)
-      ) %>%
-      group_by(year, regression_class, triad_name) %>%
-      summarise(pin_total_count = n()),
-    join_by(tax_year == year, regression_class == regression_class, triad_name == triad_name)
+    ptax_class_year_triad_summary,
+    join_by(tax_year == year, major_class_type, triad_name)
   ) %>%
   mutate(ratio = count / pin_total_count)
 
@@ -284,6 +295,23 @@ sales_ptax <- sales_ptax %>%
     reporting_group = factor(reporting_group, levels = c("Single-Family", "Multi-Family", "Condominium"))
   )
 
+# Captions for later use ---------------------------------------------------
+
+caption_1 <- paste0(
+  "Note: Points represent averages summarized by sales percentile, property type, triad, and year. Points are scaled to the number of sales. Ratios more than 1.5 times the lower or upper\n",
+  "interquartile range were excluded. Sale prices are inflation adjusted to 2023 dollars using the FHFA HPI. The above comparison only covers residential sales taking place in years\n",
+  "for which its township underwent a re-assessment (e.g., 2018 or 2021 for the City, 2016 or 2019 for the North suburbs, and 2017 or 2020 for the South suburbs). \n",
+  "Class codes: Single Family - 202, 203, 204, 205, 206, 207, 208, 209, 210, 234, 278, 295. Multi Family - 212, 213. Condominumium - 299, 399."
+)
+
+caption_2 <- paste0(
+  "Note: Residential refers to all properties in the 200s class.\n",
+  "Commercial refers to all properties with the class 500, 501, 516, 517, 522, 523, 526, 527, 528, 529, 530, 531, 532, 533, 535, 590, 591, 592, 597, 599.\n",
+  "For more information: https://prodassets.cookcountyassessor.com/s3fs-public/form_documents/classcode.pdf."
+)
+
+caption_3 <- "Only including class codes: Single Family - 202, 203, 204, 205, 206, 207, 208, 209, 210, 234, 278, 295. Multi Family - 212, 213."
+
 # Visualizations ----------------------------------------------------------
 
 # Cook county sales ratio -------------------------------------------------
@@ -378,19 +406,11 @@ sales_ptax_summary <- sales_ptax %>%
 
 (cook_comp_av_w_total <- cook_comp_av + cook_comp_av_total +
   plot_layout(ncol = 2, guides = "collect", widths = c(3, 1)) +
-  plot_annotation(caption = paste0(
-    "Note: Points represent averages summarized by sales percentile, property type, triad, and year. Points are scaled to the number of sales. Ratios more than 1.5 times the lower or upper\n",
-    "interquartile range were excluded. Sale prices are inflation adjusted to 2023 dollars using the FHFA HPI. The above comparison only covers residential sales taking place in years\n",
-    "for which its township underwent a re-assessment (e.g., 2018 or 2021 for the City, 2016 or 2019 for the North suburbs, and 2017 or 2020 for the South suburbs)."
-  )) &
+  plot_annotation(caption = caption_1) &
   theme(legend.position = "bottom", plot.caption = element_text(size = 12, hjust = 0), )
 )
 
-(cook_comp_av <- cook_comp_av + labs(caption = paste0(
-  "Note: Points represent averages summarized by sales percentile, property type, triad, and year. Points are scaled to the number of sales. Ratios more than 1.5 times the lower or upper\n",
-  "interquartile range were excluded. Sale prices are inflation adjusted to 2023 dollars using the FHFA HPI. The above comparison only covers residential sales taking place in years\n",
-  "for which its township underwent a re-assessment (e.g., 2018 or 2021 for the City, 2016 or 2019 for the North suburbs, and 2017 or 2020 for the South suburbs)."
-)))
+(cook_comp_av <- cook_comp_av + labs(caption = caption_1))
 
 
 # Sales ratio charts by triad ------------------------------------------------
@@ -483,19 +503,11 @@ sales_ptax_summary <- sales_ptax %>%
 
 (city_comp_av_w_total <- city_comp_av + city_comp_av_total +
   plot_layout(ncol = 2, guides = "collect", widths = c(3, 1)) +
-  plot_annotation(caption = paste0(
-    "Note: Points represent averages summarized by sales percentile, property type, triad, and year. Points are scaled to the number of sales. Ratios more than 1.5 times the lower or upper\n",
-    "interquartile range were excluded. Sale prices are inflation adjusted to 2023 dollars using the FHFA HPI. The above comparison only covers residential sales taking place in years\n",
-    "for which its township underwent a re-assessment (e.g., 2018 or 2021 for the City, 2016 or 2019 for the North suburbs, and 2017 or 2020 for the South suburbs)."
-  )) &
+  plot_annotation(caption = caption_1) &
   theme(legend.position = "bottom", plot.caption = element_text(size = 12, hjust = 0), )
 )
 
-(city_comp_av <- city_comp_av + labs(caption = paste0(
-  "Note: Points represent averages summarized by sales percentile, property type, triad, and year. Points are scaled to the number of sales. Ratios more than 1.5 times the lower or upper\n",
-  "interquartile range were excluded. Sale prices are inflation adjusted to 2023 dollars using the FHFA HPI. The above comparison only covers residential sales taking place in years\n",
-  "for which its township underwent a re-assessment (e.g., 2018 or 2021 for the City, 2016 or 2019 for the North suburbs, and 2017 or 2020 for the South suburbs)."
-)))
+(city_comp_av <- city_comp_av + labs(caption = caption_1))
 
 
 # North suburbs by property type (CPI)
@@ -564,19 +576,11 @@ sales_ptax_summary <- sales_ptax %>%
 
 (north_comp_av_w_total <- north_comp_av + north_comp_av_total +
   plot_layout(ncol = 2, guides = "collect", widths = c(3, 1)) +
-  plot_annotation(caption = paste0(
-    "Note: Points represent averages summarized by sales percentile, property type, triad, and year. Points are scaled to the number of sales. Ratios more than 1.5 times the lower or upper\n",
-    "interquartile range were excluded. Sale prices are inflation adjusted to 2023 dollars using the FHFA HPI. The above comparison only covers residential sales taking place in years\n",
-    "for which its township underwent a re-assessment (e.g., 2018 or 2021 for the City, 2016 or 2019 for the North suburbs, and 2017 or 2020 for the South suburbs)."
-  )) &
+  plot_annotation(caption = caption_1) &
   theme(legend.position = "bottom", plot.caption = element_text(size = 12, hjust = 0), )
 )
 
-(north_comp_av <- north_comp_av + labs(caption = paste0(
-  "Note: Points represent averages summarized by sales percentile, property type, triad, and year. Points are scaled to the number of sales. Ratios more than 1.5 times the lower or upper\n",
-  "interquartile range were excluded. Sale prices are inflation adjusted to 2023 dollars using the FHFA HPI. The above comparison only covers residential sales taking place in years\n",
-  "for which its township underwent a re-assessment (e.g., 2018 or 2021 for the City, 2016 or 2019 for the North suburbs, and 2017 or 2020 for the South suburbs)."
-)))
+(north_comp_av <- north_comp_av + labs(caption = caption_1))
 
 # South suburbs by property type (CPI)
 (south_comp_av <- ggplot(
@@ -644,19 +648,11 @@ sales_ptax_summary <- sales_ptax %>%
 
 (south_comp_av_w_total <- south_comp_av + south_comp_av_total +
   plot_layout(ncol = 2, guides = "collect", widths = c(3, 1)) +
-  plot_annotation(caption = paste0(
-    "Note: Points represent averages summarized by sales percentile, property type, triad, and year. Points are scaled to the number of sales. Ratios more than 1.5 times the lower or upper\n",
-    "interquartile range were excluded. Sale prices are inflation adjusted to 2023 dollars using the FHFA HPI. The above comparison only covers residential sales taking place in years\n",
-    "for which its township underwent a re-assessment (e.g., 2018 or 2021 for the City, 2016 or 2019 for the North suburbs, and 2017 or 2020 for the South suburbs)."
-  )) &
+  plot_annotation(caption = caption_1) &
   theme(legend.position = "bottom", plot.caption = element_text(size = 12, hjust = 0), )
 )
 
-(south_comp_av <- south_comp_av + labs(caption = paste0(
-  "Note: Points represent averages summarized by sales percentile, property type, triad, and year. Points are scaled to the number of sales. Ratios more than 1.5 times the lower or upper\n",
-  "interquartile range were excluded. Sale prices are inflation adjusted to 2023 dollars using the FHFA HPI. The above comparison only covers residential sales taking place in years\n",
-  "for which its township underwent a re-assessment (e.g., 2018 or 2021 for the City, 2016 or 2019 for the North suburbs, and 2017 or 2020 for the South suburbs)."
-)))
+(south_comp_av <- south_comp_av + labs(caption = caption_1))
 
 
 # Residential pre/post Board of Review ------------------------------------
@@ -706,7 +702,7 @@ sales_ptax_summary <- sales_ptax %>%
 (bor_pre_post_chart <- ggplot(
   data = sales_ptax_summary %>% filter(name == "assessed_value_board_mailed_diff"),
   aes(
-    x = sale_price_cpi, y = value,
+    x = sale_price_hpi, y = value,
     group = as.character(year), fill = as.character(year), color = as.character(year)
   )
 ) +
@@ -736,7 +732,7 @@ sales_ptax_summary <- sales_ptax %>%
   ggplot(
     data = sales_ptax_summary %>% filter(name == "assessed_value_board_mailed_diff_pct"),
     aes(
-      x = sale_price_cpi, y = value,
+      x = sale_price_hpi, y = value,
       group = as.character(year), fill = as.character(year), color = as.character(year)
     )
   ) +
@@ -778,12 +774,16 @@ ptax_data_composition_abs <- ptax_data %>%
   filter(year >= 2011 & year <= 2022) %>%
   inner_join(., class_data, by = c("class" = "class_code")) %>%
   mutate(township_code = str_sub(tax_code_num, start = 1L, end = 2L)) %>%
-  left_join(., townships %>% st_drop_geometry() %>% select(township_code, triad_name), by = c("township_code" = "township_code")) %>%
+  left_join(
+    .,
+    townships %>% st_drop_geometry() %>% select(township_code, triad_name),
+    by = c("township_code" = "township_code")
+  ) %>%
   mutate(pin = str_pad(string = pin, width = 14, side = c("left"), pad = "0", use_width = TRUE)) %>%
-  group_by(res_nonres_label, year) %>%
+  group_by(major_class_type, year) %>%
   summarize_at(vars(c("tax_bill_total", "av_mailed", "av_certified", "av_board", "av_clerk")), list(sum)) %>%
   ungroup() %>%
-  select(res_nonres_label, year, av_mailed, av_board, av_certified, av_clerk, tax_bill_total) %>%
+  select(major_class_type, year, av_mailed, av_board, av_certified, av_clerk, tax_bill_total) %>%
   pivot_longer(cols = c(av_mailed, av_board, av_certified, av_clerk, tax_bill_total)) %>%
   mutate(name = case_when(
     name == "tax_bill_total" ~ "Tax bills",
@@ -800,9 +800,13 @@ ptax_data_composition <- ptax_data %>%
   filter(year >= 2011 & year <= 2022) %>%
   inner_join(., class_data, by = c("class" = "class_code")) %>%
   mutate(township_code = str_sub(tax_code_num, start = 1L, end = 2L)) %>%
-  left_join(., townships %>% st_drop_geometry() %>% select(township_code, triad_name), by = c("township_code" = "township_code")) %>%
+  left_join(
+    .,
+    townships %>% st_drop_geometry() %>% select(township_code, triad_name),
+    by = c("township_code" = "township_code")
+  ) %>%
   mutate(pin = str_pad(string = pin, width = 14, side = c("left"), pad = "0", use_width = TRUE)) %>%
-  group_by(res_nonres_label, year) %>%
+  group_by(major_class_type, year) %>%
   summarize_at(vars(c("tax_bill_total", "av_mailed", "av_certified", "av_board", "av_clerk")), list(sum)) %>%
   ungroup() %>%
   group_by(year) %>%
@@ -821,7 +825,7 @@ ptax_data_composition <- ptax_data %>%
     av_clerk_share = av_clerk / av_clerk_sum,
     tax_bill_share = tax_bill_total / tax_bill_total_sum
   ) %>%
-  select(res_nonres_label, year, av_mailed_share, av_board_share, av_certified_share, av_clerk_share, tax_bill_share) %>%
+  select(major_class_type, year, av_mailed_share, av_board_share, av_certified_share, av_clerk_share, tax_bill_share) %>%
   pivot_longer(cols = c(av_mailed_share, av_board_share, av_certified_share, av_clerk_share, tax_bill_share)) %>%
   mutate(name = case_when(
     name == "tax_bill_share" ~ "Tax bills",
@@ -841,15 +845,15 @@ ptax_data_composition <- ptax_data %>%
   geom_text(aes(x = 2016, y = .4, label = "Berrios\n(second term)"), fontface = "bold") +
   geom_text(aes(x = 2020, y = .4, label = "Kaegi\n(first term)"), fontface = "bold") +
   geom_point(
-    data = ptax_data_composition %>% filter(res_nonres_label == "Residential"),
+    data = ptax_data_composition %>% filter(major_class_type == "Residential"),
     aes(x = year, y = value, color = name), size = 12, alpha = .9
   ) +
   geom_line(
-    data = ptax_data_composition %>% filter(res_nonres_label == "Residential"),
+    data = ptax_data_composition %>% filter(major_class_type == "Residential"),
     aes(x = year, y = value, color = name), linewidth = 2, alpha = .3
   ) +
   geom_text(
-    data = ptax_data_composition %>% filter(res_nonres_label == "Residential"),
+    data = ptax_data_composition %>% filter(major_class_type == "Residential"),
     aes(x = year, y = value, label = paste0(round(value * 100), "%")),
     size = 4, fontface = "bold", color = "white",
     check_overlap = TRUE
@@ -859,7 +863,7 @@ ptax_data_composition <- ptax_data %>%
   scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
   labs(
     subtitle = "Residential share of assessed property value and tax burden",
-    caption = "Note: Residential refers to all properties in the 200s class, non-residential covers 100s, 300s, 400s, 500s, 600s, 700s, 800s, 900s.\nFor more information: https://prodassets.cookcountyassessor.com/s3fs-public/form_documents/classcode.pdf."
+    caption = caption_2
   ) +
   theme_classic() +
   theme(
@@ -879,25 +883,25 @@ ptax_data_composition <- ptax_data %>%
   geom_text(aes(x = 2016, y = 2e10, label = "Berrios\n(second term)"), fontface = "bold") +
   geom_text(aes(x = 2020, y = 2e10, label = "Kaegi\n(first term)"), fontface = "bold") +
   geom_point(
-    data = ptax_data_composition_abs %>% filter(res_nonres_label == "Residential"),
+    data = ptax_data_composition_abs %>% filter(major_class_type == "Residential"),
     aes(x = year, y = value, color = name), size = 12, alpha = .9
   ) +
   geom_line(
-    data = ptax_data_composition_abs %>% filter(res_nonres_label == "Residential"),
+    data = ptax_data_composition_abs %>% filter(major_class_type == "Residential"),
     aes(x = year, y = value, color = name), linewidth = 2, alpha = .3
   ) +
   geom_text(
-    data = ptax_data_composition_abs %>% filter(res_nonres_label == "Residential"),
+    data = ptax_data_composition_abs %>% filter(major_class_type == "Residential"),
     aes(x = year, y = value, label = paste0(round(value / 1e9), "B$")),
     size = 3.5, fontface = "bold", color = "white",
     check_overlap = TRUE
   ) +
   scale_color_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
-  scale_y_continuous(name = "Residential properties", limits = c(1e9, 4.5e10), expand = c(0, 0), labels = scales::dollar_format()) +
+  scale_y_continuous(name = "Residential properties", limits = c(1e9, 4.5e10), expand = c(0, 0), labels = scales::label_dollar(scale_cut = cut_short_scale())) +
   scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
   labs(
     subtitle = "Residential assessed property value and tax burden",
-    caption = "Note: Residential refers to all properties in the 200s class, non-residential covers 100s, 300s, 400s, 500s, 600s, 700s, 800s, 900s.\nFor more information: https://prodassets.cookcountyassessor.com/s3fs-public/form_documents/classcode.pdf."
+    caption = caption_2
   ) +
   theme_classic() +
   theme(
@@ -909,33 +913,33 @@ ptax_data_composition <- ptax_data %>%
     legend.title = element_blank()
   ))
 
-(nonres_composition_chart <- ggplot() +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = .2, ymax = .55), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = .2, ymax = .55), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = .2, ymax = .55), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+(com_composition_chart <- ggplot() +
+  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = .2, ymax = .4), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = .2, ymax = .4), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = .2, ymax = .4), fill = "#f6f6ed", color = "white", alpha = 0.5) +
   geom_text(aes(x = 2012, y = .25, label = "Berrios\n(first term)"), fontface = "bold") +
   geom_text(aes(x = 2016, y = .25, label = "Berrios\n(second term)"), fontface = "bold") +
   geom_text(aes(x = 2020, y = .25, label = "Kaegi\n(first term)"), fontface = "bold") +
   geom_point(
-    data = ptax_data_composition %>% filter(res_nonres_label == "Non-residential"),
+    data = ptax_data_composition %>% filter(major_class_type == "Commercial"),
     aes(x = year, y = value, color = name), size = 12, alpha = .9
   ) +
   geom_line(
-    data = ptax_data_composition %>% filter(res_nonres_label == "Non-residential"),
+    data = ptax_data_composition %>% filter(major_class_type == "Commercial"),
     aes(x = year, y = value, color = name), linewidth = 2, alpha = .3
   ) +
   geom_text(
-    data = ptax_data_composition %>% filter(res_nonres_label == "Non-residential"),
+    data = ptax_data_composition %>% filter(major_class_type == "Commercial"),
     aes(x = year, y = value, label = paste0(round(value * 100), "%")),
     size = 4, fontface = "bold", color = "white",
     check_overlap = TRUE
   ) +
   scale_color_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
-  scale_y_continuous(name = "Non-residential share", limits = c(.2, .55), expand = c(0, 0), labels = scales::percent_format()) +
+  scale_y_continuous(name = "Commercial share", limits = c(.2, .4), expand = c(0, 0), labels = scales::percent_format()) +
   scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
   labs(
-    subtitle = "Non-residential share of assessed property value and tax burden",
-    caption = "Note: Residential refers to all properties in the 200s class, non-residential covers 100s, 300s, 400s, 500s, 600s, 700s, 800s, 900s.\nFor more information: https://prodassets.cookcountyassessor.com/s3fs-public/form_documents/classcode.pdf."
+    subtitle = "Commercial share of assessed property value and tax burden",
+    caption = caption_2
   ) +
   theme_classic() +
   theme(
@@ -947,33 +951,33 @@ ptax_data_composition <- ptax_data %>%
     legend.title = element_blank()
   ))
 
-(nonres_composition_chart_abs <- ggplot() +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 1e9, ymax = 4.5e10), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 1e9, ymax = 4.5e10), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 1e9, ymax = 4.5e10), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = 1.5e10, label = "Berrios\n(first term)"), fontface = "bold") +
-  geom_text(aes(x = 2016, y = 1.5e10, label = "Berrios\n(second term)"), fontface = "bold") +
-  geom_text(aes(x = 2020, y = 1.5e10, label = "Kaegi\n(first term)"), fontface = "bold") +
+(com_composition_chart_abs <- ggplot() +
+  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 0, ymax = 3e10), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 0, ymax = 3e10), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 0, ymax = 3e10), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012, y = 8e9, label = "Berrios\n(first term)"), fontface = "bold") +
+  geom_text(aes(x = 2016, y = 8e9, label = "Berrios\n(second term)"), fontface = "bold") +
+  geom_text(aes(x = 2020, y = 8e9, label = "Kaegi\n(first term)"), fontface = "bold") +
   geom_point(
-    data = ptax_data_composition_abs %>% filter(res_nonres_label == "Non-residential"),
+    data = ptax_data_composition_abs %>% filter(major_class_type == "Commercial"),
     aes(x = year, y = value, color = name), size = 12, alpha = .9
   ) +
   geom_line(
-    data = ptax_data_composition_abs %>% filter(res_nonres_label == "Non-residential"),
+    data = ptax_data_composition_abs %>% filter(major_class_type == "Commercial"),
     aes(x = year, y = value, color = name), linewidth = 2, alpha = .3
   ) +
   geom_text(
-    data = ptax_data_composition_abs %>% filter(res_nonres_label == "Non-residential"),
+    data = ptax_data_composition_abs %>% filter(major_class_type == "Commercial"),
     aes(x = year, y = value, label = paste0(round(value / 1e9), "B$")),
     size = 3.5, fontface = "bold", color = "white",
     check_overlap = TRUE
   ) +
   scale_color_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
-  scale_y_continuous(name = "Non-residential properties", limits = c(1e9, 4.5e10), expand = c(0, 0), labels = scales::dollar_format()) +
+  scale_y_continuous(name = "Commercial properties", limits = c(0, 3e10), expand = c(0, 0), labels = scales::label_dollar(scale_cut = cut_short_scale())) +
   scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
   labs(
-    subtitle = "Non-residential assessed property value and tax burden",
-    caption = "Note: Residential refers to all properties in the 200s class, non-residential covers 100s, 300s, 400s, 500s, 600s, 700s, 800s, 900s.\nFor more information: https://prodassets.cookcountyassessor.com/s3fs-public/form_documents/classcode.pdf."
+    subtitle = "Commercial assessed property value and tax burden",
+    caption = caption_2
   ) +
   theme_classic() +
   theme(
@@ -995,15 +999,15 @@ ptax_data_composition <- ptax_data %>%
   geom_text(aes(x = 2016, y = 0.35, label = "Berrios\n(second term)"), fontface = "bold") +
   geom_text(aes(x = 2020, y = 0.35, label = "Kaegi\n(first term)"), fontface = "bold") +
   geom_area(
-    data = appeals_summary %>% filter(regression_class),
+    data = appeals_summary %>% filter(major_class_type == "Residential", Result != "Increase"),
     aes(x = tax_year, y = ratio, fill = Result)
   ) +
   scale_fill_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
-  scale_y_continuous(name = "Ratio of Residential properties", limits = c(0, 0.45), expand = c(0, 0), labels = scales::percent_format()) +
+  scale_y_continuous(name = "Ratio of residential properties", limits = c(0, 0.45), expand = c(0, 0), labels = scales::percent_format()) +
   scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
   labs(
-    subtitle = "Ratio of residential property appeals to Board of Review and outcomes",
-    caption = "Note: Residential refers to all properties in the 200s class, non-residential covers 100s, 300s, 400s, 500s, 600s, 700s, 800s, 900s.\nFor more information: https://prodassets.cookcountyassessor.com/s3fs-public/form_documents/classcode.pdf."
+    subtitle = "Percentage of Residential properties with appeals filed to Board of Review, and outcomes",
+    caption = caption_2
   ) +
   theme_classic() +
   theme(
@@ -1015,23 +1019,23 @@ ptax_data_composition <- ptax_data %>%
     legend.title = element_blank()
   ))
 
-(non_res_appeal_ratio_chart <- ggplot() +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 0, ymax = 0.55), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 0, ymax = 0.55), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 0, ymax = 0.55), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = 0.45, label = "Berrios\n(first term)"), fontface = "bold") +
-  geom_text(aes(x = 2016, y = 0.45, label = "Berrios\n(second term)"), fontface = "bold") +
-  geom_text(aes(x = 2020, y = 0.45, label = "Kaegi\n(first term)"), fontface = "bold") +
+(com_appeal_ratio_chart <- ggplot() +
+  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 0, ymax = 0.75), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 0, ymax = 0.75), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 0, ymax = 0.75), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012, y = 0.7, label = "Berrios\n(first term)"), fontface = "bold") +
+  geom_text(aes(x = 2016, y = 0.7, label = "Berrios\n(second term)"), fontface = "bold") +
+  geom_text(aes(x = 2020, y = 0.7, label = "Kaegi\n(first term)"), fontface = "bold") +
   geom_area(
-    data = appeals_summary %>% filter(!regression_class),
+    data = appeals_summary %>% filter(major_class_type == "Commercial", Result != "Increase"),
     aes(x = tax_year, y = ratio, fill = Result)
   ) +
   scale_fill_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
-  scale_y_continuous(name = "Ratio of Non-residential properties", limits = c(0, 0.55), expand = c(0, 0), labels = scales::percent_format()) +
+  scale_y_continuous(name = "Ratio of commercial properties", limits = c(0, 0.75), expand = c(0, 0), labels = scales::percent_format()) +
   scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
   labs(
-    subtitle = "Ratio of non-residential property appeals to Board of Review and outcomes",
-    caption = "Note: Residential refers to all properties in the 200s class, non-residential covers 100s, 300s, 400s, 500s, 600s, 700s, 800s, 900s.\nFor more information: https://prodassets.cookcountyassessor.com/s3fs-public/form_documents/classcode.pdf."
+    subtitle = "Percentage of Commercial properties with appeals filed to Board of Review, and outcomes",
+    caption = caption_2
   ) +
   theme_classic() +
   theme(
@@ -1042,10 +1046,16 @@ ptax_data_composition <- ptax_data %>%
     legend.text = element_text(size = 13, color = "#333333"),
     legend.title = element_blank()
   ))
+
+year_triad <- tibble(
+  year = 2011:2022,
+  triad_name = rep(c("South", "City", "North"), 4)
+) %>%
+  filter(year != 2022)
 
 # Cook County Board of Review - ratio of reviews - by triad
 (res_appeal_triad_ratio_chart <- ggplot(
-  data = appeals_summary_by_triad %>% filter(regression_class),
+  data = appeals_summary_by_triad %>% filter(major_class_type == "Residential", Result != "Increase"),
   aes(x = tax_year, y = ratio, fill = Result)
 ) +
   facet_wrap(~triad_name) +
@@ -1057,11 +1067,17 @@ ptax_data_composition <- ptax_data %>%
   geom_text(aes(x = 2020, y = 0.55, label = "Kaegi\n(first term)")) +
   geom_area() +
   scale_fill_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
-  scale_y_continuous(name = "Ratio of Residential properties", limits = c(0, 0.6), expand = c(0, 0), labels = scales::percent_format()) +
+  geom_vline(
+    aes(xintercept = year, color = "Year of reassessment"),
+    linetype = "longdash", alpha = 0.5, data = year_triad
+  ) +
+  facet_wrap(~triad_name) +
+  scale_color_manual(values = c("#ffc425")) +
+  scale_y_continuous(name = "Ratio of residential properties", limits = c(0, 0.6), expand = c(0, 0), labels = scales::percent_format()) +
   scale_x_continuous(name = "Year", breaks = c(2011, 2013, 2015, 2017, 2019, 2021)) +
   labs(
-    subtitle = "Ratio of residential property appeals to Board of Review and outcomes",
-    caption = "Note: Residential refers to all properties in the 200s class, non-residential covers 100s, 300s, 400s, 500s, 600s, 700s, 800s, 900s.\nFor more information: https://prodassets.cookcountyassessor.com/s3fs-public/form_documents/classcode.pdf."
+    subtitle = "Percentage of Residential properties with appeals filed to Board of Review, and outcomes",
+    caption = caption_2
   ) +
   theme_classic() +
   theme(
@@ -1075,53 +1091,30 @@ ptax_data_composition <- ptax_data %>%
     plot.margin = margin(t = 15, r = 20, b = 10, l = 15)
   ))
 
-(non_res_appeal_ratio_chart <- ggplot() +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 0, ymax = 0.55), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 0, ymax = 0.55), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 0, ymax = 0.55), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = 0.45, label = "Berrios\n(first term)"), fontface = "bold") +
-  geom_text(aes(x = 2016, y = 0.45, label = "Berrios\n(second term)"), fontface = "bold") +
-  geom_text(aes(x = 2020, y = 0.45, label = "Kaegi\n(first term)"), fontface = "bold") +
-  geom_area(
-    data = appeals_summary %>% filter(!regression_class),
-    aes(x = tax_year, y = ratio, fill = Result)
-  ) +
-  scale_fill_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
-  scale_y_continuous(name = "Ratio of Non-residential properties", limits = c(0, 0.55), expand = c(0, 0), labels = scales::percent_format()) +
-  scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
-  labs(
-    subtitle = "Ratio of non-residential property appeals to Board of Review and outcomes",
-    caption = "Note: Residential refers to all properties in the 200s class, non-residential covers 100s, 300s, 400s, 500s, 600s, 700s, 800s, 900s.\nFor more information: https://prodassets.cookcountyassessor.com/s3fs-public/form_documents/classcode.pdf."
-  ) +
-  theme_classic() +
-  theme(
-    legend.position = "bottom",
-    plot.subtitle = element_text(size = 13, hjust = .5, face = "bold", color = "#333333"),
-    plot.caption = element_text(size = 12, color = "#333333", hjust = 0),
-    axis.text = element_text(size = 11, color = "#333333"), axis.title = element_text(size = 14, color = "#333333"),
-    legend.text = element_text(size = 13, color = "#333333"),
-    legend.title = element_blank()
-  ))
-
-# Cook County Board of Review - ratio of reviews - by triad
-(non_res_appeal_triad_ratio_chart <- ggplot(
-  data = appeals_summary_by_triad %>% filter(!regression_class),
+(com_appeal_triad_ratio_chart <- ggplot(
+  data = appeals_summary_by_triad %>% filter(major_class_type == "Commercial", Result != "Increase"),
   aes(x = tax_year, y = ratio, fill = Result)
 ) +
   facet_wrap(~triad_name) +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 0, ymax = 0.7), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 0, ymax = 0.7), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 0, ymax = 0.7), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = 0.65, label = "Berrios\n(first term)")) +
-  geom_text(aes(x = 2016, y = 0.65, label = "Berrios\n(second term)")) +
-  geom_text(aes(x = 2020, y = 0.65, label = "Kaegi\n(first term)")) +
+  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 0, ymax = 0.95), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 0, ymax = 0.95), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 0, ymax = 0.95), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012, y = 0.9, label = "Berrios\n(first term)")) +
+  geom_text(aes(x = 2016, y = 0.9, label = "Berrios\n(second term)")) +
+  geom_text(aes(x = 2020, y = 0.9, label = "Kaegi\n(first term)")) +
   geom_area() +
   scale_fill_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
-  scale_y_continuous(name = "Ratio of Non-residential properties", limits = c(0, 0.7), expand = c(0, 0), labels = scales::percent_format()) +
+  geom_vline(
+    aes(xintercept = year, color = "Year of reassessment"),
+    linetype = "longdash", alpha = 0.5, data = year_triad
+  ) +
+  facet_wrap(~triad_name) +
+  scale_color_manual(values = c("#ffc425")) +
+  scale_y_continuous(name = "Ratio of commercial properties", limits = c(0, 0.95), expand = c(0, 0), labels = scales::percent_format()) +
   scale_x_continuous(name = "Year", breaks = c(2011, 2013, 2015, 2017, 2019, 2021)) +
   labs(
-    subtitle = "Ratio of non-residential property appeals to Board of Review and outcomes",
-    caption = "Note: Residential refers to all properties in the 200s class, non-residential covers 100s, 300s, 400s, 500s, 600s, 700s, 800s, 900s.\nFor more information: https://prodassets.cookcountyassessor.com/s3fs-public/form_documents/classcode.pdf."
+    subtitle = "Percentage of Commercial properties with appeals filed to Board of Review, and outcomes",
+    caption = caption_2
   ) +
   theme_classic() +
   theme(
@@ -1151,12 +1144,12 @@ ggsave(plot = south_comp_av_w_total, filename = paste0(path_dir, "/4a-south_av_w
 ggsave(plot = bor_pre_post_chart, filename = paste0(path_dir, "/5-bor_pre_post.pdf"), width = 14, height = 7)
 ggsave(plot = res_composition_chart, filename = paste0(path_dir, "/6-res_composition.pdf"), width = 14, height = 7)
 ggsave(plot = res_composition_chart_abs, filename = paste0(path_dir, "/6a-res_composition_abs.pdf"), width = 14, height = 7)
-ggsave(plot = nonres_composition_chart, filename = paste0(path_dir, "/7-nonres_composition.pdf"), width = 14, height = 7)
-ggsave(plot = nonres_composition_chart_abs, filename = paste0(path_dir, "/7a-nonres_composition_abs.pdf"), width = 14, height = 7)
+ggsave(plot = com_composition_chart, filename = paste0(path_dir, "/7-com_composition.pdf"), width = 14, height = 7)
+ggsave(plot = com_composition_chart_abs, filename = paste0(path_dir, "/7a-com_composition_abs.pdf"), width = 14, height = 7)
 ggsave(plot = res_appeal_ratio_chart, filename = paste0(path_dir, "/8-res_appeal_ratio.pdf"), width = 14, height = 7)
 ggsave(plot = res_appeal_triad_ratio_chart, filename = paste0(path_dir, "/8a-res_appeal_ratio.pdf"), width = 14, height = 7)
-ggsave(plot = non_res_appeal_ratio_chart, filename = paste0(path_dir, "/9-nonres_appeal_ratio.pdf"), width = 14, height = 7)
-ggsave(plot = non_res_appeal_triad_ratio_chart, filename = paste0(path_dir, "/9a-res_appeal_ratio.pdf"), width = 14, height = 7)
+ggsave(plot = com_appeal_ratio_chart, filename = paste0(path_dir, "/9-com_appeal_ratio.pdf"), width = 14, height = 7)
+ggsave(plot = com_appeal_triad_ratio_chart, filename = paste0(path_dir, "/9a-com_appeal_ratio.pdf"), width = 14, height = 7)
 
 
 # Other metrics -----------------------------------------------------------
@@ -1195,7 +1188,7 @@ sales_ptax_cod <- sales_ptax %>%
   scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
   labs(
     subtitle = "Coefficient of Dispersion by Year for residential properties",
-    captions = "Note: Only including single-family and multi-family homes"
+    captions = caption_3
   ) +
   theme_classic() +
   theme(
@@ -1243,7 +1236,7 @@ sales_ptax_prd <- sales_ptax %>%
   scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
   labs(
     subtitle = "Price-Related Differential by Year for residential properties",
-    captions = "Note: Only including single-family and multi-family homes"
+    captions = caption_3
   ) +
   theme_classic() +
   theme(
@@ -1295,7 +1288,7 @@ sales_ptax_prb <- sales_ptax %>%
   scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
   labs(
     subtitle = "Coefficient of Price-Related Bias by Year for residential properties",
-    captions = "Note: Only including single-family and multi-family homes"
+    captions = caption_3
   ) +
   theme_classic() +
   theme(
@@ -1520,9 +1513,9 @@ library(viridis)
   ))
 
 
-ggsave(plot = city_map, filename = paste0(path_dir, "/7-city_map.pdf"), width = 8, height = 7)
-ggsave(plot = north_map, filename = paste0(path_dir, "/8-north_av_ratio.pdf"), width = 11, height = 5)
-ggsave(plot = south_map, filename = paste0(path_dir, "/9-south_av_ratio.pdf"), width = 10, height = 8)
+ggsave(plot = city_map, filename = paste0(path_dir, "/13-city_map.pdf"), width = 8, height = 7)
+ggsave(plot = north_map, filename = paste0(path_dir, "/14-north_av_ratio.pdf"), width = 11, height = 5)
+ggsave(plot = south_map, filename = paste0(path_dir, "/15-south_av_ratio.pdf"), width = 10, height = 8)
 
 
 # # Race / ethnicity regions ------------------------------------------------
