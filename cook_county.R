@@ -77,7 +77,8 @@ library(nlme)
 # Sales
 sales_data <- read_parquet("data/Assessor_-_Parcel_Sales.parquet") %>%
   filter(year >= 2011) %>%
-  select(pin, year, sale_date, sale_price) %>%
+  # select(pin, year, sale_date, sale_price) %>%
+  select(-class, -township_code) %>%
   mutate(pin = str_pad(string = pin, width = 14, side = c("left"), pad = "0", use_width = TRUE))
 
 # Remove least recent sales for properties that sold more than once in a year
@@ -295,22 +296,46 @@ sales_ptax <- sales_ptax %>%
     reporting_group = factor(reporting_group, levels = c("Single-Family", "Multi-Family", "Condominium"))
   )
 
+# FLAGGING SALES OUTLIERS ---------------------------------------------------
+
+sales_ptax <- sales_ptax %>%
+  group_by(reporting_group) %>%
+  mutate(
+    mean_log10_sale = mean(log10(sale_price_hpi)),
+    sd_log10_sale = sd(log10(sale_price_hpi)),
+    lower_sale_threshold = mean_log10_sale - 3 * sd_log10_sale,
+    upper_sale_threshold = mean_log10_sale + 3 * sd_log10_sale,
+    sale_price_outlier = ifelse(log10(sale_price_hpi) > lower_sale_threshold & log10(sale_price_hpi) < upper_sale_threshold, 1, 0)
+  )
+
 # Captions for later use ---------------------------------------------------
 
 caption_1 <- paste0(
   "Note: Points represent averages summarized by sales percentile, property type, triad, and year. Points are scaled to the number of sales. Ratios more than 1.5 times the lower or upper\n",
-  "interquartile range were excluded. Sale prices are inflation adjusted to 2023 dollars using the FHFA HPI. The above comparison only covers residential sales taking place in years\n",
-  "for which its township underwent a re-assessment (e.g., 2018 or 2021 for the City, 2016 or 2019 for the North suburbs, and 2017 or 2020 for the South suburbs). \n",
+  "interquartile range were excluded. Sale prices are inflation adjusted to 2023 dollars using the FHFA HPI. The above comparison only covers residential sales taking place in years for which its\n",
+  "township underwent a re-assessment (e.g., 2018 or 2021 for the City, 2016 or 2019 for the North suburbs, and 2017 or 2020 for the South suburbs). Tax bills for a certain year are payable in\n",
+  "the next year. The tax-bills sent out in the first year of a new administration, were partially or in whole subject to the methods of assessment of the older administration. \n",
   "Class codes: Single Family - 202, 203, 204, 205, 206, 207, 208, 209, 210, 234, 278, 295. Multi Family - 212, 213. Condominumium - 299, 399."
 )
 
 caption_2 <- paste0(
-  "Note: Residential refers to all properties in the 200s class.\n",
-  "Commercial refers to all properties with the class 500, 501, 516, 517, 522, 523, 526, 527, 528, 529, 530, 531, 532, 533, 535, 590, 591, 592, 597, 599.\n",
-  "For more information: https://prodassets.cookcountyassessor.com/s3fs-public/form_documents/classcode.pdf."
+  "Note: Tax bills for a certain year are payable in the next year. The tax-bills sent out in the first year of a new administration, were partially or in whole subject to the methods of\n",
+  "assessment of the older administration. Residential refers to all properties in the 200s class. Commercial refers to all properties with the class 500, 501, 516, 517, 522, 523, 526, \n",
+  "527, 528, 529, 530, 531, 532, 533, 535, 590, 591, 592, 597, 599. For more information: https://prodassets.cookcountyassessor.com/s3fs-public/form_documents/classcode.pdf."
 )
 
-caption_3 <- "Only including class codes: Single Family - 202, 203, 204, 205, 206, 207, 208, 209, 210, 234, 278, 295. Multi Family - 212, 213."
+caption_3 <- paste0(
+  "Note: Tax bills for a certain year are payable in the next year. The tax-bills sent out in the first year of a new administration, were partially or in whole subject to the methods of assessment\n",
+  "of the older administration. Only including class codes: Single Family - 202, 203, 204, 205, 206, 207, 208, 209, 210, 234, 278, 295. Multi Family - 212, 213. Condos - 299, 399. Within\n",
+  "each reporting group, excludes sales more than 3 standard deviations away from the mean, in the log prices."
+)
+
+caption_4 <- paste0(
+  "Note: Tax bills for a certain year are payable in the next year. The tax-bills sent out in the first year of a new administration, were partially or in whole subject to the methods of\n",
+  "assessment of the older administration. The above data reflects reductions in assessed values among residential properties sold the same year for which they were re-assessed.\n",
+  "Points are scaled to the number of sales. Data with assessed value ratios more than 1.5 times the lower or upper interquartile range were excluded. Sale prices are inflation\n",
+  "adjusted to 2023 dollars using the FHFA HPI."
+)
 
 # Visualizations ----------------------------------------------------------
 
@@ -756,10 +781,7 @@ sales_ptax_summary <- sales_ptax %>%
   ) +
   plot_annotation(
     title = "Change in assessed value of residential properties after Board of Review appeal",
-    caption = paste0(
-      "Note: the above data reflects reductions in assessed values among residential properties sold the same year for which they were re-assessed. Points are scaled to the number of sales.\n",
-      "Data with assessed value ratios more than 1.5 times the lower or upper interquartile range were excluded. Sale prices are inflation adjusted to 2023 dollars using the FHFA HPI."
-    )
+    caption = caption_4
   ) +
   plot_layout(ncol = 2, guides = "collect") &
   theme(
@@ -838,12 +860,12 @@ ptax_data_composition <- ptax_data %>%
   mutate(name = factor(name, levels = c("Assessed value (mailed)", "Assessed value (Board of Review)", "Tax bills")))
 
 (res_composition_chart <- ggplot() +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = .35, ymax = .7), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = .35, ymax = .7), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = .35, ymax = .7), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = .4, label = "Berrios\n(first term)"), fontface = "bold") +
-  geom_text(aes(x = 2016, y = .4, label = "Berrios\n(second term)"), fontface = "bold") +
-  geom_text(aes(x = 2020, y = .4, label = "Kaegi\n(first term)"), fontface = "bold") +
+  geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = .4, ymax = .7), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = .4, ymax = .7), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = .4, ymax = .7), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012.5, y = .45, label = "Assessed under\nBerrios"), fontface = "bold") +
+  geom_text(aes(x = 2016.5, y = .45, label = "Assessed under\nBerrios"), fontface = "bold") +
+  geom_text(aes(x = 2020.5, y = .45, label = "Assessed under\nKaegi"), fontface = "bold") +
   geom_point(
     data = ptax_data_composition %>% filter(major_class_type == "Residential"),
     aes(x = year, y = value, color = name), size = 12, alpha = .9
@@ -859,8 +881,8 @@ ptax_data_composition <- ptax_data %>%
     check_overlap = TRUE
   ) +
   scale_color_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
-  scale_y_continuous(name = "Residential share", limits = c(.35, .7), expand = c(0, 0), labels = scales::percent_format()) +
-  scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
+  scale_y_continuous(name = "Residential share", limits = c(.4, .7), expand = c(0, 0), labels = scales::percent_format()) +
+  scale_x_continuous(name = "Tax Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021), expand = c(0.01, 0.01)) +
   labs(
     subtitle = "Residential share of assessed property value and tax burden",
     caption = caption_2
@@ -876,12 +898,12 @@ ptax_data_composition <- ptax_data %>%
   ))
 
 (res_composition_chart_abs <- ggplot() +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 1e9, ymax = 4.5e10), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 1e9, ymax = 4.5e10), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 1e9, ymax = 4.5e10), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = 2e10, label = "Berrios\n(first term)"), fontface = "bold") +
-  geom_text(aes(x = 2016, y = 2e10, label = "Berrios\n(second term)"), fontface = "bold") +
-  geom_text(aes(x = 2020, y = 2e10, label = "Kaegi\n(first term)"), fontface = "bold") +
+  geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = 1e9, ymax = 4.5e10), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = 1e9, ymax = 4.5e10), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = 1e9, ymax = 4.5e10), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012.5, y = 2e10, label = "Assessed under\nBerrios"), fontface = "bold") +
+  geom_text(aes(x = 2016.5, y = 2e10, label = "Assessed under\nBerrios"), fontface = "bold") +
+  geom_text(aes(x = 2020.5, y = 2e10, label = "Assessed under\nKaegi"), fontface = "bold") +
   geom_point(
     data = ptax_data_composition_abs %>% filter(major_class_type == "Residential"),
     aes(x = year, y = value, color = name), size = 12, alpha = .9
@@ -892,13 +914,13 @@ ptax_data_composition <- ptax_data %>%
   ) +
   geom_text(
     data = ptax_data_composition_abs %>% filter(major_class_type == "Residential"),
-    aes(x = year, y = value, label = paste0(round(value / 1e9), "B$")),
-    size = 3.5, fontface = "bold", color = "white",
+    aes(x = year, y = value, label = paste0("$", signif(value / 1e9, 2), "B")),
+    size = 3.2, fontface = "bold", color = "white",
     check_overlap = TRUE
   ) +
   scale_color_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
   scale_y_continuous(name = "Residential properties", limits = c(1e9, 4.5e10), expand = c(0, 0), labels = scales::label_dollar(scale_cut = cut_short_scale())) +
-  scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
+  scale_x_continuous(name = "Tax Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021), expand = c(0.01, 0.01)) +
   labs(
     subtitle = "Residential assessed property value and tax burden",
     caption = caption_2
@@ -914,12 +936,12 @@ ptax_data_composition <- ptax_data %>%
   ))
 
 (com_composition_chart <- ggplot() +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = .2, ymax = .4), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = .2, ymax = .4), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = .2, ymax = .4), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = .25, label = "Berrios\n(first term)"), fontface = "bold") +
-  geom_text(aes(x = 2016, y = .25, label = "Berrios\n(second term)"), fontface = "bold") +
-  geom_text(aes(x = 2020, y = .25, label = "Kaegi\n(first term)"), fontface = "bold") +
+  geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = .23, ymax = .35), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = .23, ymax = .35), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = .23, ymax = .35), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012.5, y = .25, label = "Assessed under\nBerrios"), fontface = "bold") +
+  geom_text(aes(x = 2016.5, y = .25, label = "Assessed under\nBerrios"), fontface = "bold") +
+  geom_text(aes(x = 2020.5, y = .25, label = "Assessed under\nKaegi"), fontface = "bold") +
   geom_point(
     data = ptax_data_composition %>% filter(major_class_type == "Commercial"),
     aes(x = year, y = value, color = name), size = 12, alpha = .9
@@ -935,8 +957,8 @@ ptax_data_composition <- ptax_data %>%
     check_overlap = TRUE
   ) +
   scale_color_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
-  scale_y_continuous(name = "Commercial share", limits = c(.2, .4), expand = c(0, 0), labels = scales::percent_format()) +
-  scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
+  scale_y_continuous(name = "Commercial share", limits = c(.23, .35), expand = c(0, 0), labels = scales::percent_format()) +
+  scale_x_continuous(name = "Tax Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021), expand = c(0.01, 0.01)) +
   labs(
     subtitle = "Commercial share of assessed property value and tax burden",
     caption = caption_2
@@ -952,12 +974,12 @@ ptax_data_composition <- ptax_data %>%
   ))
 
 (com_composition_chart_abs <- ggplot() +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 0, ymax = 3e10), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 0, ymax = 3e10), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 0, ymax = 3e10), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = 8e9, label = "Berrios\n(first term)"), fontface = "bold") +
-  geom_text(aes(x = 2016, y = 8e9, label = "Berrios\n(second term)"), fontface = "bold") +
-  geom_text(aes(x = 2020, y = 8e9, label = "Kaegi\n(first term)"), fontface = "bold") +
+  geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = 0, ymax = 3e10), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = 0, ymax = 3e10), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = 0, ymax = 3e10), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012.5, y = 8e9, label = "Assessed under\nBerrios"), fontface = "bold") +
+  geom_text(aes(x = 2016.5, y = 8e9, label = "Assessed under\nBerrios"), fontface = "bold") +
+  geom_text(aes(x = 2020.5, y = 8e9, label = "Assessed under\nKaegi"), fontface = "bold") +
   geom_point(
     data = ptax_data_composition_abs %>% filter(major_class_type == "Commercial"),
     aes(x = year, y = value, color = name), size = 12, alpha = .9
@@ -968,13 +990,13 @@ ptax_data_composition <- ptax_data %>%
   ) +
   geom_text(
     data = ptax_data_composition_abs %>% filter(major_class_type == "Commercial"),
-    aes(x = year, y = value, label = paste0(round(value / 1e9), "B$")),
-    size = 3.5, fontface = "bold", color = "white",
+    aes(x = year, y = value, label = paste0("$", signif(value / 1e9, 2), "B")),
+    size = 3.2, fontface = "bold", color = "white",
     check_overlap = TRUE
   ) +
   scale_color_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
   scale_y_continuous(name = "Commercial properties", limits = c(0, 3e10), expand = c(0, 0), labels = scales::label_dollar(scale_cut = cut_short_scale())) +
-  scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
+  scale_x_continuous(name = "Tax Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021), expand = c(0.01, 0.01)) +
   labs(
     subtitle = "Commercial assessed property value and tax burden",
     caption = caption_2
@@ -992,19 +1014,19 @@ ptax_data_composition <- ptax_data %>%
 # Cook County Board of Review - ratio of reviews
 
 (res_appeal_ratio_chart <- ggplot() +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 0, ymax = 0.45), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 0, ymax = 0.45), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 0, ymax = 0.45), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = 0.35, label = "Berrios\n(first term)"), fontface = "bold") +
-  geom_text(aes(x = 2016, y = 0.35, label = "Berrios\n(second term)"), fontface = "bold") +
-  geom_text(aes(x = 2020, y = 0.35, label = "Kaegi\n(first term)"), fontface = "bold") +
+  geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = 0, ymax = 0.45), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = 0, ymax = 0.45), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = 0, ymax = 0.45), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012.5, y = 0.35, label = "Assessed under\nBerrios"), fontface = "bold") +
+  geom_text(aes(x = 2016.5, y = 0.35, label = "Assessed under\nBerrios"), fontface = "bold") +
+  geom_text(aes(x = 2020.5, y = 0.35, label = "Assessed under\nKaegi"), fontface = "bold") +
   geom_area(
     data = appeals_summary %>% filter(major_class_type == "Residential", Result != "Increase"),
     aes(x = tax_year, y = ratio, fill = Result)
   ) +
-  scale_fill_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
+  scale_fill_manual(values = c("#BFFBFF", "#00C7F8", "#CE5741")) +
   scale_y_continuous(name = "Ratio of residential properties", limits = c(0, 0.45), expand = c(0, 0), labels = scales::percent_format()) +
-  scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
+  scale_x_continuous(name = "Tax Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021), expand = c(0.01, 0.01)) +
   labs(
     subtitle = "Percentage of Residential properties with appeals filed to Board of Review, and outcomes",
     caption = caption_2
@@ -1020,19 +1042,19 @@ ptax_data_composition <- ptax_data %>%
   ))
 
 (com_appeal_ratio_chart <- ggplot() +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 0, ymax = 0.75), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 0, ymax = 0.75), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 0, ymax = 0.75), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = 0.7, label = "Berrios\n(first term)"), fontface = "bold") +
-  geom_text(aes(x = 2016, y = 0.7, label = "Berrios\n(second term)"), fontface = "bold") +
-  geom_text(aes(x = 2020, y = 0.7, label = "Kaegi\n(first term)"), fontface = "bold") +
+  geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = 0, ymax = 0.75), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = 0, ymax = 0.75), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = 0, ymax = 0.75), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012.5, y = 0.7, label = "Assessed under\nBerrios"), fontface = "bold") +
+  geom_text(aes(x = 2016.5, y = 0.7, label = "Assessed under\nBerrios"), fontface = "bold") +
+  geom_text(aes(x = 2020.5, y = 0.7, label = "Assessed under\nKaegi"), fontface = "bold") +
   geom_area(
     data = appeals_summary %>% filter(major_class_type == "Commercial", Result != "Increase"),
     aes(x = tax_year, y = ratio, fill = Result)
   ) +
-  scale_fill_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
+  scale_fill_manual(values = c("#BFFBFF", "#00C7F8", "#CE5741")) +
   scale_y_continuous(name = "Ratio of commercial properties", limits = c(0, 0.75), expand = c(0, 0), labels = scales::percent_format()) +
-  scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
+  scale_x_continuous(name = "Tax Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021), expand = c(0.01, 0.01)) +
   labs(
     subtitle = "Percentage of Commercial properties with appeals filed to Board of Review, and outcomes",
     caption = caption_2
@@ -1059,22 +1081,22 @@ year_triad <- tibble(
   aes(x = tax_year, y = ratio, fill = Result)
 ) +
   facet_wrap(~triad_name) +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 0, ymax = 0.6), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 0, ymax = 0.6), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 0, ymax = 0.6), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = 0.55, label = "Berrios\n(first term)")) +
-  geom_text(aes(x = 2016, y = 0.55, label = "Berrios\n(second term)")) +
-  geom_text(aes(x = 2020, y = 0.55, label = "Kaegi\n(first term)")) +
+  geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = 0, ymax = 0.6), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = 0, ymax = 0.6), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = 0, ymax = 0.6), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012.5, y = 0.55, label = "Assessed under\nBerrios")) +
+  geom_text(aes(x = 2016.5, y = 0.55, label = "Assessed under\nBerrios")) +
+  geom_text(aes(x = 2020.5, y = 0.55, label = "Assessed under\nKaegi")) +
   geom_area() +
-  scale_fill_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
+  scale_fill_manual(values = c("#BFFBFF", "#00C7F8")) +
   geom_vline(
     aes(xintercept = year, color = "Year of reassessment"),
     linetype = "longdash", alpha = 0.5, data = year_triad
   ) +
   facet_wrap(~triad_name) +
-  scale_color_manual(values = c("#ffc425")) +
+  scale_color_manual(values = c("#CE5741")) +
   scale_y_continuous(name = "Ratio of residential properties", limits = c(0, 0.6), expand = c(0, 0), labels = scales::percent_format()) +
-  scale_x_continuous(name = "Year", breaks = c(2011, 2013, 2015, 2017, 2019, 2021)) +
+  scale_x_continuous(name = "Tax Year", breaks = c(2011, 2013, 2015, 2017, 2019, 2021), expand = c(0.01, 0.01)) +
   labs(
     subtitle = "Percentage of Residential properties with appeals filed to Board of Review, and outcomes",
     caption = caption_2
@@ -1096,22 +1118,22 @@ year_triad <- tibble(
   aes(x = tax_year, y = ratio, fill = Result)
 ) +
   facet_wrap(~triad_name) +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 0, ymax = 0.95), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 0, ymax = 0.95), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 0, ymax = 0.95), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = 0.9, label = "Berrios\n(first term)")) +
-  geom_text(aes(x = 2016, y = 0.9, label = "Berrios\n(second term)")) +
-  geom_text(aes(x = 2020, y = 0.9, label = "Kaegi\n(first term)")) +
+  geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = 0, ymax = 0.95), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = 0, ymax = 0.95), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = 0, ymax = 0.95), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012.5, y = 0.9, label = "Assessed under\nBerrios")) +
+  geom_text(aes(x = 2016.5, y = 0.9, label = "Assessed under\nBerrios")) +
+  geom_text(aes(x = 2020.5, y = 0.9, label = "Assessed under\nKaegi")) +
   geom_area() +
-  scale_fill_manual(values = c("#009EFA", "#845EC2", "#FF6F91")) +
+  scale_fill_manual(values = c("#BFFBFF", "#00C7F8")) +
   geom_vline(
     aes(xintercept = year, color = "Year of reassessment"),
     linetype = "longdash", alpha = 0.5, data = year_triad
   ) +
   facet_wrap(~triad_name) +
-  scale_color_manual(values = c("#ffc425")) +
+  scale_color_manual(values = c("#CE5741")) +
   scale_y_continuous(name = "Ratio of commercial properties", limits = c(0, 0.95), expand = c(0, 0), labels = scales::percent_format()) +
-  scale_x_continuous(name = "Year", breaks = c(2011, 2013, 2015, 2017, 2019, 2021)) +
+  scale_x_continuous(name = "Tax Year", breaks = c(2011, 2013, 2015, 2017, 2019, 2021), expand = c(0.01, 0.01)) +
   labs(
     subtitle = "Percentage of Commercial properties with appeals filed to Board of Review, and outcomes",
     caption = caption_2
@@ -1157,7 +1179,7 @@ ggsave(plot = com_appeal_triad_ratio_chart, filename = paste0(path_dir, "/9a-com
 ## Coefficient of Dispersion
 
 sales_ptax_cod <- sales_ptax %>%
-  filter(year >= 2011, reporting_group != "Condominium", outlier_flag_iaao == 1) %>%
+  filter(year >= 2011, outlier_flag_iaao == 1, sale_price_outlier == 1) %>%
   group_by(year) %>%
   mutate(abs_dif = abs(av_ratio_board - median(av_ratio_board))) %>%
   summarise(
@@ -1166,28 +1188,28 @@ sales_ptax_cod <- sales_ptax %>%
   )
 
 (cod_chart <- ggplot(data = sales_ptax_cod) +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 0, ymax = 0.7), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 0, ymax = 0.7), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 0, ymax = 0.7), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = 0.2, label = "Berrios\n(first term)")) +
-  geom_text(aes(x = 2016, y = 0.2, label = "Berrios\n(second term)")) +
-  geom_text(aes(x = 2020, y = 0.2, label = "Kaegi\n(first term)")) +
+  geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = 0, ymax = 0.7), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = 0, ymax = 0.7), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = 0, ymax = 0.7), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012.5, y = 0.2, label = "Assessed under\nBerrios")) +
+  geom_text(aes(x = 2016.5, y = 0.2, label = "Assessed under\nBerrios")) +
+  geom_text(aes(x = 2020.5, y = 0.2, label = "Assessed under\nKaegi")) +
   geom_ribbon(
     aes(
-      ymin = 0.05, ymax = 0.15, x = (year - 2016) * (6 / 5.05) + 2016
+      ymin = 0.05, ymax = 0.15, x = (year - 2016) * (11.9 / 10) + 2016.5
     ),
     fill = "#49DEA4", alpha = 0.5
   ) +
-  geom_text(aes(x = 2016, y = 0.1, label = "Acceptable CoD")) +
+  geom_text(aes(x = 2016.5, y = 0.1, label = "Acceptable CoD")) +
   geom_line(
     aes(x = year, y = cod, color = "Coefficient of Dispersion"),
     lwd = 2
   ) +
   scale_color_manual(values = "#ffc425") +
   scale_y_continuous(name = "Coefficient of Dispersion", limits = c(0, 0.7), expand = c(0, 0), labels = scales::percent_format()) +
-  scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
+  scale_x_continuous(name = "Tax Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021), expand = c(0.01, 0.01)) +
   labs(
-    subtitle = "Coefficient of Dispersion by Year for residential properties",
+    subtitle = "Coefficient of Dispersion by Tax Year for residential properties",
     captions = caption_3
   ) +
   theme_classic() +
@@ -1203,7 +1225,7 @@ sales_ptax_cod <- sales_ptax %>%
   ))
 
 sales_ptax_prd <- sales_ptax %>%
-  filter(year >= 2011, reporting_group != "Condominium", outlier_flag_iaao == 1) %>%
+  filter(year >= 2011, outlier_flag_iaao == 1, sale_price_outlier == 1) %>%
   group_by(year) %>%
   summarise(
     mean_av = mean(av_ratio_board, na.rm = TRUE),
@@ -1214,28 +1236,28 @@ sales_ptax_prd <- sales_ptax %>%
   )
 
 (prd_chart <- ggplot(data = sales_ptax_prd) +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = 0.8, ymax = 2.3), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = 0.8, ymax = 2.3), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = 0.8, ymax = 2.3), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = 0.9, label = "Berrios\n(first term)")) +
-  geom_text(aes(x = 2016, y = 0.9, label = "Berrios\n(second term)")) +
-  geom_text(aes(x = 2020, y = 0.9, label = "Kaegi\n(first term)")) +
+  geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = 0.6, ymax = 2), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = 0.6, ymax = 2), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = 0.6, ymax = 2), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012.5, y = 0.85, label = "Assessed under\nBerrios")) +
+  geom_text(aes(x = 2016.5, y = 0.85, label = "Assessed under\nBerrios")) +
+  geom_text(aes(x = 2020.5, y = 0.85, label = "Assessed under\nKaegi")) +
   geom_ribbon(
     aes(
-      ymin = 0.98, ymax = 1.03, x = (year - 2016) * (6 / 5.05) + 2016
+      ymin = 0.98, ymax = 1.03, x = (year - 2016) * (11.9 / 10) + 2016.5
     ),
     fill = "#49DEA4", alpha = 0.5
   ) +
-  geom_text(aes(x = 2016, y = 1.01, label = "Acceptable PRD")) +
+  geom_text(aes(x = 2016.5, y = 1.01, label = "Acceptable PRD")) +
   geom_line(
     aes(x = year, y = prd, color = "Price-Related Differential"),
     lwd = 2
   ) +
   scale_color_manual(values = "#ffc425") +
-  scale_y_continuous(name = "Price-Related Differential", limits = c(0.8, 2.3), expand = c(0, 0)) +
-  scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
+  scale_y_continuous(name = "Price-Related Differential", limits = c(0.6, 2), expand = c(0, 0)) +
+  scale_x_continuous(name = "Tax Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021), expand = c(0.01, 0.01)) +
   labs(
-    subtitle = "Price-Related Differential by Year for residential properties",
+    subtitle = "Price-Related Differential by Tax Year for residential properties",
     captions = caption_3
   ) +
   theme_classic() +
@@ -1251,7 +1273,7 @@ sales_ptax_prd <- sales_ptax %>%
   ))
 
 sales_ptax_prb <- sales_ptax %>%
-  filter(year >= 2011, reporting_group != "Condominium", outlier_flag_iaao == 1) %>%
+  filter(year >= 2011, outlier_flag_iaao == 1, sale_price_outlier == 1) %>%
   group_by(year) %>%
   mutate(
     value = ((av_board / median(av_ratio_board)) + (sale_price)) / 2,
@@ -1266,28 +1288,28 @@ sales_ptax_prb <- sales_ptax %>%
   mutate(year = as.numeric(year))
 
 (prb_chart <- ggplot(data = sales_ptax_prb) +
-  geom_rect(mapping = aes(xmin = 2018.05, xmax = 2021.95, ymin = -0.9, ymax = 0.16), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.05, xmax = 2017.95, ymin = -0.9, ymax = 0.16), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.05, xmax = 2013.95, ymin = -0.9, ymax = 0.16), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012, y = -0.8, label = "Berrios\n(first term)")) +
-  geom_text(aes(x = 2016, y = -0.8, label = "Berrios\n(second term)")) +
-  geom_text(aes(x = 2020, y = -0.8, label = "Kaegi\n(first term)")) +
+  geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = -0.6, ymax = 0.16), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = -0.6, ymax = 0.16), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = -0.6, ymax = 0.16), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012.5, y = -0.5, label = "Assessed under\nBerrios")) +
+  geom_text(aes(x = 2016.5, y = -0.5, label = "Assessed under\nBerrios")) +
+  geom_text(aes(x = 2020.5, y = -0.5, label = "Assessed under\nKaegi")) +
   geom_ribbon(
     aes(
-      ymin = -0.05, ymax = 0.05, x = (year - 2016) * (6 / 5.05) + 2016
+      ymin = -0.05, ymax = 0.05, x = (year - 2016) * (11.9 / 10) + 2016.5
     ),
     fill = "#49DEA4", alpha = 0.5
   ) +
-  geom_text(aes(x = 2016, y = 0.01, label = "Acceptable PRB")) +
+  geom_text(aes(x = 2016.5, y = 0.01, label = "Acceptable PRB")) +
   geom_line(
     aes(x = year, y = ln_value, color = "Coefficient of Price-Related Bias"),
     lwd = 2
   ) +
   scale_color_manual(values = "#ffc425") +
-  scale_y_continuous(name = "Coefficient of Price-Related Bias", limits = c(-0.9, 0.16), expand = c(0, 0)) +
-  scale_x_continuous(name = "Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)) +
+  scale_y_continuous(name = "Coefficient of Price-Related Bias", limits = c(-0.6, 0.16), expand = c(0, 0)) +
+  scale_x_continuous(name = "Tax Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021), expand = c(0.01, 0.01)) +
   labs(
-    subtitle = "Coefficient of Price-Related Bias by Year for residential properties",
+    subtitle = "Coefficient of Price-Related Bias by Tax Year for residential properties",
     captions = caption_3
   ) +
   theme_classic() +
