@@ -1,3 +1,4 @@
+
 # Load packages -----------------------------------------------------------
 
 library(tidyverse)
@@ -14,25 +15,11 @@ library(sfarrow)
 library(patchwork)
 library(scales)
 library(nlme)
+library(tidycensus)
 
 # Based on code here: https://uchicago.app.box.com/folder/219001753953?tc=collab-folder-invite-treatment-b
 
 # -------------------------------------------------------------------------
-
-# Methodological questions
-# https://docs.google.com/presentation/d/14OiOJM22-s2ggyydYCqhhO8BWVGHUvbYs9vRljP1qDA/edit#slide=id.p
-
-# 1) Should we restrict comparisons to each area's triennial assessment year?
-#    So compare the city in 2018 to 2021, northern subs in 2016 to 2019, southern subs in 2017 to 2020?
-# 2) Should we make comparisons between the previous years (t-1) sales and current years (t) assessment?
-#    The argument for doing this is b/c the current year model's training data goes up to Dec 31 of the previous year,
-#    so for instance the 2023 model is based on 2022 sales up to Dec 31. On the other hand, comparing
-#    2022 sales vs 2022 model provides insight into how well the model forecasts, and it eliminates the possibility of sales chasing,
-#    and bias from using in sample training data (if they are not producing out of sample scores for data included in the training data).
-# 3) Should exclude condos from the study (apparently they use a different assessment model and Berrios used to sales chase)?
-#    "Regression classes" are technically the only PINs that are subject to the automated valuation model.
-#    If we do include condos, both 299 + 399 are subject to the condo model, which we should compare separately.
-#    And the 300 level multifamily as well as 400s, 500s, 600s, 700s etc are handled by commercial valuation team (assuming we exclude).
 
 # Relevant repos
 # https://ccao-data.github.io/ptaxsim/reference/index.html
@@ -43,10 +30,13 @@ library(nlme)
 
 # -------------------------------------------------------------------------
 
-# EDIT DIRECTORY PATH
-# setwd("/Users/nm/Desktop/Projects/work/cook-assessor/download.nosync")
-
-# dir.create("data", showWarnings = FALSE)
+# Option 1: create your own directory path for source data
+setwd("/Users/nm/Desktop/Projects/work/cook-assessor/download.nosync")
+# Option 2: place directory path for source data in repo
+# setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+dir.create("data", showWarnings = FALSE)
+dir.create("viz", showWarnings = FALSE)
+getwd()
 
 # -------------------------------------------------------------------------
 
@@ -65,7 +55,6 @@ library(nlme)
 # https://datacatalog.cookcountyil.gov/Property-Taxation/Assessor-Parcel-Universe/nj4t-kc8j
 # z <- read_json_arrow('https://datacatalog.cookcountyil.gov/resource/nj4t-kc8j.json$select=pin, township_code')
 # https://datacatalog.cookcountyil.gov/api/views/nj4t-kc8j/rows.csv
-
 
 ## BoR Appeals Data  ----------------------------------------------------------
 # curl::multi_download("https://datacatalog.cookcountyil.gov/api/views/7pny-nedm/rows.csv", "data/BoR_-_Parcel_Appeals.csv", resume = TRUE)
@@ -90,9 +79,8 @@ sales_data <- sales_data %>%
   filter(repeat_sale_order == 1)
 
 # Property tax bills and assessments
-ptaxsim_db_conn <- DBI::dbConnect(RSQLite::SQLite(), "/Users/divijsinha/Library/CloudStorage/Box-Box/Cook County 2023/ptaxsim-2021.0.4.db/ptaxsim-2021.0.4.db")
+ptaxsim_db_conn <- DBI::dbConnect(RSQLite::SQLite(), "data/ptaxsim-2021.0.4.db")
 ptax_data <- dbGetQuery(ptaxsim_db_conn, "SELECT year, pin, tax_code_num, class, tax_bill_total, av_mailed, av_certified, av_board, av_clerk FROM pin where year >= 2011") %>% as_tibble()
-
 
 # class_data <- read_csv('https://raw.githubusercontent.com/ccao-data/ccao/master/data-raw/class_dict.csv')
 # Source: https://prodassets.cookcountyassessor.com/s3fs-public/form_documents/classcode.pdf
@@ -118,8 +106,10 @@ townships <- ccao::town_shp %>% st_make_valid()
 ptax_class_year_summary <- ptax_data %>%
   filter(year >= 2011 & year <= 2022) %>%
   inner_join(., class_data, by = c("class" = "class_code")) %>%
+  mutate(pin_total_count = 1) %>%
   group_by(year, major_class_type) %>%
-  summarise(pin_total_count = n(), av_board_sum = sum(av_board)) %>%
+  # summarise(pin_total_count = n(), av_board_sum = sum(av_board)) %>%
+  summarize_at(vars(pin_total_count, av_board), list(sum)) %>%
   ungroup()
 
 ptax_class_year_triad_summary <- ptax_data %>%
@@ -129,59 +119,79 @@ ptax_class_year_triad_summary <- ptax_data %>%
   left_join(
     .,
     townships %>% st_drop_geometry() %>% select(township_code, triad_name),
-    join_by(township_code == township_code)
+    # join_by(township_code == township_code)
+    by = c('township_code' = 'township_code')
   ) %>%
+  mutate(pin_total_count = 1) %>% 
   group_by(year, major_class_type, triad_name) %>%
-  summarise(pin_total_count = n(), av_board_sum = sum(av_board)) %>%
+  #summarise(pin_total_count = n(), av_board_sum = sum(av_board)) %>%
+  summarize_at(vars(pin_total_count, av_board), list(sum)) %>%
   ungroup()
 
 # Appeals
 parcel_appeals <- read_parquet("data/BoR_-_Parcel_Appeals.parquet") %>%
+  rename_all(list(tolower)) %>%
   filter(tax_year >= 2011) %>%
-  filter(Class != 0)
+  filter(class != 0)
 
 # THIS SHOULD ALWAYS BE EMPTY
-# parcel_appeals %>% filter((Class >= 1000) & (Class <= 9999))
+# parcel_appeals %>% filter((class >= 1000) & (class <= 9999))
 
 parcel_appeals <- parcel_appeals %>%
-  mutate(class_char = ifelse(Class >= 1000, Class / 100, Class)) %>%
+  mutate(class_char = ifelse(class >= 1000, class / 100, class)) %>%
   mutate(class_char = as.character(class_char)) %>%
-  inner_join(., class_data, join_by(class_char == class_code))
+  inner_join(., class_data, 
+             by = c('class_char' = 'class_code')
+             #join_by(class_char == class_code)
+             ) %>%
+  mutate(count = 1) %>%
+  rename(assessor_total = assessor_totalvalue,
+         bor_total = bor_totalvalue) 
 
 appeals_summary <- parcel_appeals %>%
-  group_by(tax_year, major_class_type, Result) %>%
-  summarise(
-    count = n(),
-    assessor_total = sum(Assessor_TotalValue),
-    bor_total = sum(BOR_TotalValue)
-  ) %>%
-  ungroup() %>%
-  full_join(
-    ., ptax_class_year_summary, join_by(tax_year == year, major_class_type)
-  ) %>%
+  group_by(tax_year, major_class_type, result) %>%
+  #summarise(count = n(), assessor_total = sum(Assessor_TotalValue), bor_total = sum(BOR_TotalValue)) %>%
+  summarize_at(vars(count, assessor_total, bor_total), list(sum)) %>%
+  ungroup() 
+
+appeals_summary <- ptax_class_year_summary %>%
+  left_join(., appeals_summary,
+            by = c( 'year' = 'tax_year', 'major_class_type' = 'major_class_type')) %>%
   mutate(ratio = count / pin_total_count)
+
+# %>%
+#   full_join(
+#     ., ptax_class_year_summary, #join_by(tax_year == year, major_class_type)
+#     by = c('tax_year' = 'year', 'major_class_type' = 'major_class_type')
+#   ) %>%
+#   mutate(ratio = count / pin_total_count)
 
 appeals_summary_by_triad <- parcel_appeals %>%
   mutate(township_code = as.character(township_code)) %>%
   left_join(
     .,
     townships %>% st_drop_geometry() %>% select(township_code, triad_name),
-    join_by(township_code == township_code)
+    #join_by(township_code == township_code)
+    by = c('township_code' = 'township_code')
   ) %>%
-  group_by(tax_year, major_class_type, Result, triad_name) %>%
-  summarise(
-    count = n(),
-    assessor_total = sum(Assessor_TotalValue),
-    bor_total = sum(BOR_TotalValue)
-  ) %>%
-  ungroup() %>%
-  full_join(
-    .,
-    ptax_class_year_triad_summary,
-    join_by(tax_year == year, major_class_type, triad_name)
-  ) %>%
+  group_by(tax_year, major_class_type, result, triad_name) %>%
+  #summarise(count = n(), assessor_total = sum(Assessor_TotalValue), bor_total = sum(BOR_TotalValue) ) %>%
+  summarize_at(vars(count, assessor_total, bor_total), list(sum)) %>%
+  ungroup() 
+
+appeals_summary_by_triad <- ptax_class_year_triad_summary %>%
+  left_join(., 
+            appeals_summary_by_triad,
+             by = c('year' = 'tax_year', 'major_class_type' = 'major_class_type', 'triad_name' = 'triad_name')
+            )  %>%
   mutate(ratio = count / pin_total_count)
 
+# %>%
+#   full_join( ., ptax_class_year_triad_summary,
+#     join_by(tax_year == year, major_class_type, triad_name)
+#     # by = c('tax_year' = 'year', 'major_class_type' = 'major_class_type', 'triad_name' = 'triad_name')
+#   ) %>%
+#   mutate(ratio = count / pin_total_count)
 
 # Join class, township, and sales data to assessments ---------------------
 
@@ -224,7 +234,8 @@ sales_ptax <- sales_ptax %>%
     upper_trim_point = quartile_3 + (iqr * 1.5)
   ) %>%
   ungroup() %>%
-  mutate(outlier_flag_iaao = case_when(av_ratio_mailed > lower_trim_point & av_ratio_mailed < upper_trim_point ~ 1, TRUE ~ as.integer(0))) %>%
+  mutate(outlier_flag_iaao = case_when(av_ratio_mailed > lower_trim_point & av_ratio_mailed < upper_trim_point ~ 1, 
+                                       TRUE ~ as.integer(0))) %>%
   group_by(year, township_code, class) %>%
   mutate(
     av_ratio_1_to_99 = case_when(av_ratio_mailed < quantile(av_ratio_mailed, 0.01) | av_ratio_mailed > quantile(av_ratio_mailed, 0.99) ~ 0, TRUE ~ as.integer(1)),
@@ -298,13 +309,14 @@ sales_ptax <- sales_ptax %>%
 
 # FLAGGING SALES OUTLIERS ---------------------------------------------------
 
+# 3 standard deviations of log10 sale price
 sales_ptax <- sales_ptax %>%
   group_by(reporting_group) %>%
   mutate(
     mean_log10_sale = mean(log10(sale_price_hpi)),
     sd_log10_sale = sd(log10(sale_price_hpi)),
-    lower_sale_threshold = mean_log10_sale - 3 * sd_log10_sale,
-    upper_sale_threshold = mean_log10_sale + 3 * sd_log10_sale,
+    lower_sale_threshold = mean_log10_sale - (3 * sd_log10_sale),
+    upper_sale_threshold = mean_log10_sale + (3 * sd_log10_sale),
     sale_price_outlier = ifelse(log10(sale_price_hpi) > lower_sale_threshold & log10(sale_price_hpi) < upper_sale_threshold, 1, 0)
   )
 
@@ -362,7 +374,8 @@ sales_ptax_summary <- sales_ptax %>%
     av_ratio_mailed = mean(av_ratio_mailed),
     sale_price = mean(sale_price),
     sale_price_cpi = mean(sale_price_cpi),
-    sale_price_hpi = mean(sale_price_hpi)
+    sale_price_hpi = mean(sale_price_hpi),
+    .groups = 'keep'
   ) %>%
   ungroup()
 
@@ -458,7 +471,8 @@ sales_ptax_summary <- sales_ptax %>%
     av_ratio_mailed = mean(av_ratio_mailed),
     sale_price = mean(sale_price),
     sale_price_cpi = mean(sale_price_cpi),
-    sale_price_hpi = mean(sale_price_hpi)
+    sale_price_hpi = mean(sale_price_hpi),
+    .groups = 'keep'
   ) %>%
   ungroup()
 
@@ -700,6 +714,7 @@ sales_ptax_summary <- sales_ptax %>%
     sale_price = mean(sale_price),
     sale_price_cpi = mean(sale_price_cpi),
     sale_price_hpi = mean(sale_price_hpi),
+    .groups = 'keep'
   ) %>%
   ungroup() %>%
   mutate(
@@ -858,6 +873,7 @@ ptax_data_composition <- ptax_data %>%
   )) %>%
   filter(name %in% c("Tax bills", "Assessed value (Board of Review)", "Assessed value (mailed)")) %>%
   mutate(name = factor(name, levels = c("Assessed value (mailed)", "Assessed value (Board of Review)", "Tax bills")))
+
 
 (res_composition_chart <- ggplot() +
   geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = .4, ymax = .7), fill = "#ceccc4", color = "white", alpha = 0.5) +
@@ -1021,8 +1037,8 @@ ptax_data_composition <- ptax_data %>%
   geom_text(aes(x = 2016.5, y = 0.35, label = "Assessed under\nBerrios"), fontface = "bold") +
   geom_text(aes(x = 2020.5, y = 0.35, label = "Assessed under\nKaegi"), fontface = "bold") +
   geom_area(
-    data = appeals_summary %>% filter(major_class_type == "Residential", Result != "Increase"),
-    aes(x = tax_year, y = ratio, fill = Result)
+    data = appeals_summary %>% filter(major_class_type == "Residential", result != "Increase"),
+    aes(x = year, y = ratio, fill = result)
   ) +
   scale_fill_manual(values = c("#BFFBFF", "#00C7F8", "#CE5741")) +
   scale_y_continuous(name = "Ratio of residential properties", limits = c(0, 0.45), expand = c(0, 0), labels = scales::percent_format()) +
@@ -1049,8 +1065,8 @@ ptax_data_composition <- ptax_data %>%
   geom_text(aes(x = 2016.5, y = 0.7, label = "Assessed under\nBerrios"), fontface = "bold") +
   geom_text(aes(x = 2020.5, y = 0.7, label = "Assessed under\nKaegi"), fontface = "bold") +
   geom_area(
-    data = appeals_summary %>% filter(major_class_type == "Commercial", Result != "Increase"),
-    aes(x = tax_year, y = ratio, fill = Result)
+    data = appeals_summary %>% filter(major_class_type == "Commercial", result != "Increase"),
+    aes(x = year, y = ratio, fill = result)
   ) +
   scale_fill_manual(values = c("#BFFBFF", "#00C7F8", "#CE5741")) +
   scale_y_continuous(name = "Ratio of commercial properties", limits = c(0, 0.75), expand = c(0, 0), labels = scales::percent_format()) +
@@ -1077,8 +1093,8 @@ year_triad <- tibble(
 
 # Cook County Board of Review - ratio of reviews - by triad
 (res_appeal_triad_ratio_chart <- ggplot(
-  data = appeals_summary_by_triad %>% filter(major_class_type == "Residential", Result != "Increase"),
-  aes(x = tax_year, y = ratio, fill = Result)
+  data = appeals_summary_by_triad %>% filter(major_class_type == "Residential", result != "Increase"),
+  aes(x = year, y = ratio, fill = result)
 ) +
   facet_wrap(~triad_name) +
   geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = 0, ymax = 0.6), fill = "#ceccc4", color = "white", alpha = 0.5) +
@@ -1114,8 +1130,8 @@ year_triad <- tibble(
   ))
 
 (com_appeal_triad_ratio_chart <- ggplot(
-  data = appeals_summary_by_triad %>% filter(major_class_type == "Commercial", Result != "Increase"),
-  aes(x = tax_year, y = ratio, fill = Result)
+  data = appeals_summary_by_triad %>% filter(major_class_type == "Commercial", result != "Increase"),
+  aes(x = year, y = ratio, fill = result)
 ) +
   facet_wrap(~triad_name) +
   geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = 0, ymax = 0.95), fill = "#ceccc4", color = "white", alpha = 0.5) +
@@ -1153,37 +1169,67 @@ year_triad <- tibble(
 # -------------------------------------------------------------------------
 
 # path_dir <- '/Users/nm/Desktop/Projects/work/cook-assessor/assessor-comp/Cook County 2023/viz'
-path_dir <- "viz"
 
-ggsave(plot = cook_comp_av, filename = paste0(path_dir, "/1-cook_av_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = cook_comp_av_w_total, filename = paste0(path_dir, "/1a-cook_av_w_total_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = city_comp_av, filename = paste0(path_dir, "/2-city_av_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = city_comp_av_w_total, filename = paste0(path_dir, "/2a-city_av_w_total_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = north_comp_av, filename = paste0(path_dir, "/3-north_av_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = north_comp_av_w_total, filename = paste0(path_dir, "/3a-north_av_w_total_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = south_comp_av, filename = paste0(path_dir, "/4-south_av_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = south_comp_av_w_total, filename = paste0(path_dir, "/4a-south_av_w_total_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = bor_pre_post_chart, filename = paste0(path_dir, "/5-bor_pre_post.pdf"), width = 14, height = 7)
-ggsave(plot = res_composition_chart, filename = paste0(path_dir, "/6-res_composition.pdf"), width = 14, height = 7)
-ggsave(plot = res_composition_chart_abs, filename = paste0(path_dir, "/6a-res_composition_abs.pdf"), width = 14, height = 7)
-ggsave(plot = com_composition_chart, filename = paste0(path_dir, "/7-com_composition.pdf"), width = 14, height = 7)
-ggsave(plot = com_composition_chart_abs, filename = paste0(path_dir, "/7a-com_composition_abs.pdf"), width = 14, height = 7)
-ggsave(plot = res_appeal_ratio_chart, filename = paste0(path_dir, "/8-res_appeal_ratio.pdf"), width = 14, height = 7)
-ggsave(plot = res_appeal_triad_ratio_chart, filename = paste0(path_dir, "/8a-res_appeal_ratio.pdf"), width = 14, height = 7)
-ggsave(plot = com_appeal_ratio_chart, filename = paste0(path_dir, "/9-com_appeal_ratio.pdf"), width = 14, height = 7)
-ggsave(plot = com_appeal_triad_ratio_chart, filename = paste0(path_dir, "/9a-com_appeal_ratio.pdf"), width = 14, height = 7)
-
+ggsave(plot = cook_comp_av, filename = paste0("viz/1-cook_av_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = cook_comp_av_w_total, filename = paste0("viz/1a-cook_av_w_total_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = city_comp_av, filename = paste0("viz/2-city_av_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = city_comp_av_w_total, filename = paste0("viz/2a-city_av_w_total_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = north_comp_av, filename = paste0("viz/3-north_av_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = north_comp_av_w_total, filename = paste0("viz/3a-north_av_w_total_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = south_comp_av, filename = paste0("viz/4-south_av_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = south_comp_av_w_total, filename = paste0("viz/4a-south_av_w_total_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = bor_pre_post_chart, filename = paste0("viz/5-bor_pre_post.pdf"), width = 14, height = 7)
+ggsave(plot = res_composition_chart, filename = paste0("viz/6-res_composition.pdf"), width = 14, height = 7)
+ggsave(plot = res_composition_chart_abs, filename = paste0("viz/6a-res_composition_abs.pdf"), width = 14, height = 7)
+ggsave(plot = com_composition_chart, filename = paste0("viz/7-com_composition.pdf"), width = 14, height = 7)
+ggsave(plot = com_composition_chart_abs, filename = paste0("viz/7a-com_composition_abs.pdf"), width = 14, height = 7)
+ggsave(plot = res_appeal_ratio_chart, filename = paste0("viz/8-res_appeal_ratio.pdf"), width = 14, height = 7)
+ggsave(plot = res_appeal_triad_ratio_chart, filename = paste0("viz/8a-res_appeal_ratio.pdf"), width = 14, height = 7)
+ggsave(plot = com_appeal_ratio_chart, filename = paste0("viz/9-com_appeal_ratio.pdf"), width = 14, height = 7)
+ggsave(plot = com_appeal_triad_ratio_chart, filename = paste0("viz/9a-com_appeal_ratio.pdf"), width = 14, height = 7)
 
 # Other metrics -----------------------------------------------------------
 
-## Coefficient of Dispersion
+cod_note <- paste0(
+  "\n\nThe coefficient of dispersion (COD) measures assessment uniformity, or horizontal equity, which means taxpayers with equal property values pay equal property taxes. COD is calculated by\n",
+  "taking the average absolute percentage difference from the median sales ratio."
+  )
+
+prd_note <- paste0(
+  "\n\nThe price-related differential (PRD) is a measure of regressivity, or vertical equity, which means high-value properties are appraised higher to be progressive (or lower to be regressive)\n",
+  "than low-value properties in relation to their respective market values. PRD is calculated by dividing the mean ratio by the weighted mean ratio."
+)
+
+prb_note <- paste0(
+  "\n\nThe coefficient of price-related bias (PRB) is a measure of vertical equity and price-related bias. PRB is calculated by regressing percentage difference from the median ratio on\n",
+  "percentage differences in assessed value."
+)
+
+
+# Coefficient of Dispersion -----------------------------------------------
+
+# https://www.iaao.org/media/standards/Standard_on_Ratio_Studies.pdf#page=14
+# The most generally useful measure of variability or uniformity is the COD. 
+# The COD measures the average percentage deviation of the ratios from the median ratio and is calculated by the following steps:
+# 1. subtract the median from each ratio
+# 2. take the absolute value of the calculated differences
+# 3. sum the absolute differences
+# 4. divide by the number of ratios to obtain the average absolute deviation
+# 5. divide by the median
+# 6. multiply by 100
+
+# Measures assessment uniformity, or horizontal equity. It is the average absolute percentage difference from the median sales ratio. 
+# Horizontal equity (taxpayers with equal home values should pay equal tax)
 
 sales_ptax_cod <- sales_ptax %>%
+  # Filter using AV ratio IQR test and less than 3 st dev of sale price
   filter(year >= 2011, outlier_flag_iaao == 1, sale_price_outlier == 1) %>%
   group_by(year) %>%
-  mutate(abs_dif = abs(av_ratio_board - median(av_ratio_board))) %>%
+  #mutate(abs_dif = abs(av_ratio_board - median(av_ratio_board))) %>%
+  mutate(abs_dif = abs(av_ratio_mailed - median(av_ratio_mailed))) %>%
   summarise(
-    cod = ((sum(abs_dif) / n()) / median(av_ratio_board)),
+    #cod = ((sum(abs_dif) / n()) / median(av_ratio_board)),
+    cod = ((sum(abs_dif) / n()) / median(av_ratio_mailed)),
     n = n()
   )
 
@@ -1200,7 +1246,20 @@ sales_ptax_cod <- sales_ptax %>%
     ),
     fill = "#49DEA4", alpha = 0.5
   ) +
-  geom_text(aes(x = 2016.5, y = 0.1, label = "Acceptable CoD")) +
+  geom_text(aes(x = 2016.5, y = 0.1, label = "COD Target")) +
+    
+    #geom_segment(aes(x = 2021.85, y = .57, xend = 2021.85, yend = .6), arrow = arrow(length = unit(0.2, "cm")), linewidth = .75) +
+    #geom_text(x = 2021.85, y = 0.6, hjust = .5, vjust = -.15, label = "Less\nuniformity", size = 4) +
+  
+    #geom_segment(aes(x = 2021.85, y = .145, xend = 2021.85, yend = .115), arrow = arrow(length = unit(0.2, "cm")), linewidth = .75) +
+    #geom_text(x = 2021.85, y = 0.115, hjust = .5, vjust = 1.15, label = "More\nuniformity", size = 4) +
+    
+    geom_segment(aes(x = 2021.85, y = .12, xend = 2021.85, yend = .145), arrow = arrow(length = unit(0.2, "cm")), linewidth = .75) +
+    geom_text(x = 2021.85, y = 0.15, hjust = .5, vjust = -.15, label = "Less\nuniform", size = 3.5) +
+    
+    geom_segment(aes(x = 2021.85, y = .12, xend = 2021.85, yend = .055), arrow = arrow(length = unit(0.2, "cm")), linewidth = .75) +
+    geom_text(x = 2021.85, y = 0.055, hjust = .5, vjust = 1.15, label = "More\nuniform", size = 3.5) +
+
   geom_line(
     aes(x = year, y = cod, color = "Coefficient of Dispersion"),
     lwd = 2
@@ -1210,7 +1269,7 @@ sales_ptax_cod <- sales_ptax %>%
   scale_x_continuous(name = "Tax Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021), expand = c(0.01, 0.01)) +
   labs(
     subtitle = "Coefficient of Dispersion by Tax Year for residential properties",
-    captions = caption_3
+    captions = paste(caption_3,cod_note)
   ) +
   theme_classic() +
   theme(
@@ -1223,42 +1282,76 @@ sales_ptax_cod <- sales_ptax %>%
     strip.text = element_text(size = 13), strip.background = element_blank(),
     plot.margin = margin(t = 15, r = 20, b = 10, l = 15)
   ))
+
+
+# Price-related differential ----------------------------------------------
+
+# PRD is a measure of regressivity, or vertical equity. 
+# An appraisal bias such that high-value properties are appraised higher (or lower) than 
+# low-value properties in relation to market values. 
+
+# The mean divided by the weighted mean. The statistic has a slight bias upward.
+# Price-related differentials above 1.03 tend to indicate assessment regressivity; 
+# price-related differentials below 0.98 tend to indicate assessment progressivity
+
+# https://www.iaao.org/media/standards/Standard_on_Ratio_Studies.pdf#page=15
+
+# An index statistic for measuring vertical equity is the PRD, 
+# which is calculated by dividing the mean ratio by the weighted mean ratio. 
+# This statistic should be close to 1.00. 
+# Measures considerably above 1.00 tend to indicate assessment regressivity; 
+# Measures below 1.00 suggest assessment progressivity. 
+# When samples are small or the weighted mean is heavily influenced by several extreme
+# sales prices, the PRD may not be a sufficiently reliable measure of vertical inequities. 
+# A scatter plot of ratios versus appraised values or sale prices is a useful diagnostic tool.
+
 
 sales_ptax_prd <- sales_ptax %>%
   filter(year >= 2011, outlier_flag_iaao == 1, sale_price_outlier == 1) %>%
   group_by(year) %>%
   summarise(
-    mean_av = mean(av_ratio_board, na.rm = TRUE),
-    median_av = median(av_ratio_board),
-    weighted_mean_av = weighted.mean(av_ratio_board, sale_price_hpi),
+    #mean_av = mean(av_ratio_board, na.rm = TRUE),
+    mean_av = mean(av_ratio_mailed, na.rm = TRUE),
+    #median_av = median(av_ratio_board),
+    median_av = median(av_ratio_mailed),
+    #weighted_mean_av = weighted.mean(av_ratio_board, sale_price_hpi),
+    weighted_mean_av = weighted.mean(av_ratio_mailed, sale_price_hpi),
     prd = mean_av / weighted_mean_av,
     n = n()
   )
 
 (prd_chart <- ggplot(data = sales_ptax_prd) +
-  geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = 0.6, ymax = 2), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = 0.6, ymax = 2), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = 0.6, ymax = 2), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012.5, y = 0.85, label = "Assessed under\nBerrios")) +
-  geom_text(aes(x = 2016.5, y = 0.85, label = "Assessed under\nBerrios")) +
-  geom_text(aes(x = 2020.5, y = 0.85, label = "Assessed under\nKaegi")) +
+  geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = 0, ymax = 2), fill = "#ceccc4", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = 0, ymax = 2), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = 0, ymax = 2), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+  geom_text(aes(x = 2012.5, y = 0.2, label = "Assessed under\nBerrios")) +
+  geom_text(aes(x = 2016.5, y = 0.2, label = "Assessed under\nBerrios")) +
+  geom_text(aes(x = 2020.5, y = 0.2, label = "Assessed under\nKaegi")) +
   geom_ribbon(
     aes(
       ymin = 0.98, ymax = 1.03, x = (year - 2016) * (11.9 / 10) + 2016.5
-    ),
+   )
+  ,
     fill = "#49DEA4", alpha = 0.5
   ) +
-  geom_text(aes(x = 2016.5, y = 1.01, label = "Acceptable PRD")) +
+  geom_text(aes(x = 2016.5, y = 1.01, label = "PRD Target")) +
+    
+    geom_segment(aes(x = 2021.85, y = 1.25, xend = 2021.85, yend = 1.9), arrow = arrow(length = unit(0.2, "cm")), linewidth = .75) +
+    geom_text(x = 2021.85, y = 1.1, hjust = .5, vjust = 0, label = "More\nregressive", size = 3.8) +
+    
+    geom_segment(aes(x = 2021.85, y = .75, xend = 2021.85, yend = .1), arrow = arrow(length = unit(0.2, "cm")), linewidth = .75) +
+    geom_text(x = 2021.85, y = 0.8, hjust = .5, vjust = 0, label = "More\nprogressive", size = 3.8) +
+    
   geom_line(
     aes(x = year, y = prd, color = "Price-Related Differential"),
     lwd = 2
   ) +
   scale_color_manual(values = "#ffc425") +
-  scale_y_continuous(name = "Price-Related Differential", limits = c(0.6, 2), expand = c(0, 0)) +
+  scale_y_continuous(name = "Price-Related Differential", limits = c(0, 2), expand = c(0, 0)) +
   scale_x_continuous(name = "Tax Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021), expand = c(0.01, 0.01)) +
   labs(
     subtitle = "Price-Related Differential by Tax Year for residential properties",
-    captions = caption_3
+    captions = paste0(caption_3,prd_note)
   ) +
   theme_classic() +
   theme(
@@ -1272,129 +1365,138 @@ sales_ptax_prd <- sales_ptax %>%
     plot.margin = margin(t = 15, r = 20, b = 10, l = 15)
   ))
 
+
+# Price-related bias ------------------------------------------------------
+
+# https://www.iaao.org/media/standards/Standard_on_Ratio_Studies.pdf#page=57
+
+
+# A PRB of −.045 indicates, for example, that assessment ratios fall by 4.5% when values double and increase by 4.5% when values are halved. Like all regression coefficients, the statistical reliability of the PRB can be gauged by noting its t-value and related significance level, and by computing confidence intervals. 
+
+# The coefficient of price-related bias (PRB) is an index of vertical equity that quantifies the relationship between assessment-sales ratios (ASR) and value in percentage terms. 
+# A PRB of 0.043 indicates that, on average, assessment ratios increase by 4.3 percent whenever values increase by 100 percent (e.g., double or double again). 
+# The PRB has several technical advantages, including being less sensitive to outliers than the PRD, and also quantifies the statistical significance of observed relationships.
+
+# 1. Compute a value proxy, “value,” as 50 percent of sale price + 50 percent of assessed value. 
+# To ensure that assessed values and sales prices receive equal weight, 
+# assessed values can be divided by the median ratio before summing:
+
+# Value = 0.50 × (AV/Median) + 0.50 × SP 
+# Where:
+# AV= Assessed Value
+# SP = Sale Price
+
+# 2. Take the natural logarithm of the value proxy and divide by 0.693:
+# Ln_Value = ln(value)/0.693
+
+# Taking logarithms converts the value proxy to a percentage basis, 
+# which substantially minimizes the impact of atypically high values (outliers) in the analysis. 
+# Dividing by 0.693 allows each increment of 1 to be interpreted as a change of 100 percent. 
+# (For example, ln(100,000)/0.693 = 16.613 and ln(200,000)/0.693 = 17.613).
+
+# 3.Compute percentage differences from the median assessment ratio 
+# Pct_Diff = (ASR – Median)/Median
+# Where:
+# PCT_Diff = Percentage Difference
+# ASR = Assessment-Sales Ratio
+
+# 4. Regress (3) on (2):
+# Pct_Diff = b0 + b1 × Ln_Value
+
+# Because each increment of 1 in the independent variable represents a 100 percent change in value, 
+# the regression coefficient, b1, represents the corresponding percentage change in assessment ratios.
+  
+#The PRB provides a measure of price-related bias that is more meaningful and less sensitive to extreme prices or ratios. 
+#As a general matter, the PRB coefficient should fall between –0.05 and 0.05. 
+#PRBs for which 95% confidence intervals fall outside of this range indicate that one 
+#can reasonably conclude that assessment levels change by more than 5% when values are halved or doubled. 
+#PRBs for which 95% confidence intervals fall outside the range of –0.10 to 0.10 indicate unacceptable 
+#vertical inequities.
+
 sales_ptax_prb <- sales_ptax %>%
   filter(year >= 2011, outlier_flag_iaao == 1, sale_price_outlier == 1) %>%
-  group_by(year) %>%
+  group_by(year) %>% #check
   mutate(
-    value = ((av_board / median(av_ratio_board)) + (sale_price)) / 2,
+    # value = ((av_board / median(av_ratio_board)) + (sale_price)) / 2,
+    value = ((av_mailed / median(av_ratio_mailed)) + (sale_price)) / 2,
     ln_value = log(value) / log(2),
-    pct_diff = (av_ratio_board - median(av_ratio_board)) / median(av_ratio_board)
+    # pct_diff = (av_ratio_board - median(av_ratio_board)) / median(av_ratio_board)
+    pct_diff = (av_ratio_mailed - median(av_ratio_mailed )) / median(av_ratio_mailed)
   ) %>%
   ungroup() %>%
-  select(year, pct_diff, ln_value) %>%
-  lmList(pct_diff ~ ln_value | year, data = .) %>%
+  select(year, pct_diff, ln_value) 
+
+sales_ptax_prb_coeff <- sales_ptax_prb %>%
+  lmList(pct_diff ~ ln_value | year, data = .) %>% #check
   coef() %>%
   rownames_to_column("year") %>%
   mutate(year = as.numeric(year))
 
-(prb_chart <- ggplot(data = sales_ptax_prb) +
-  geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = -0.6, ymax = 0.16), fill = "#ceccc4", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = -0.6, ymax = 0.16), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = -0.6, ymax = 0.16), fill = "#f6f6ed", color = "white", alpha = 0.5) +
-  geom_text(aes(x = 2012.5, y = -0.5, label = "Assessed under\nBerrios")) +
-  geom_text(aes(x = 2016.5, y = -0.5, label = "Assessed under\nBerrios")) +
-  geom_text(aes(x = 2020.5, y = -0.5, label = "Assessed under\nKaegi")) +
-  geom_ribbon(
-    aes(
-      ymin = -0.05, ymax = 0.05, x = (year - 2016) * (11.9 / 10) + 2016.5
-    ),
-    fill = "#49DEA4", alpha = 0.5
-  ) +
-  geom_text(aes(x = 2016.5, y = 0.01, label = "Acceptable PRB")) +
-  geom_line(
-    aes(x = year, y = ln_value, color = "Coefficient of Price-Related Bias"),
-    lwd = 2
-  ) +
-  scale_color_manual(values = "#ffc425") +
-  scale_y_continuous(name = "Coefficient of Price-Related Bias", limits = c(-0.6, 0.16), expand = c(0, 0)) +
-  scale_x_continuous(name = "Tax Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021), expand = c(0.01, 0.01)) +
-  labs(
-    subtitle = "Coefficient of Price-Related Bias by Tax Year for residential properties",
-    captions = caption_3
-  ) +
-  theme_classic() +
-  theme(
-    legend.position = "bottom",
-    plot.subtitle = element_text(size = 13, hjust = .5, face = "bold", color = "#333333"),
-    plot.caption = element_text(size = 12, color = "#333333", hjust = 0),
-    axis.text = element_text(size = 11, color = "#333333"), axis.title = element_text(size = 14, color = "#333333"),
-    legend.text = element_text(size = 13, color = "#333333"),
-    legend.title = element_blank(),
-    strip.text = element_text(size = 13), strip.background = element_blank(),
-    plot.margin = margin(t = 15, r = 20, b = 10, l = 15)
-  ))
+sales_ptax_prb_intervals <- sales_ptax_prb %>%
+  lmList(pct_diff ~ ln_value | year, data = .) %>% #check
+  intervals(level = 0.99) 
+
+sales_ptax_prb_intervals <- sales_ptax_prb_intervals[, , 'ln_value'] %>%
+  as.data.frame() %>%
+  rownames_to_column("year") %>%
+  mutate(year = as.numeric(year))
+
+sales_ptax_prb_reg <- sales_ptax_prb_coeff %>%
+  left_join(., sales_ptax_prb_intervals, by = c('year'='year'))
+
+(prb_chart <- ggplot(data = sales_ptax_prb_reg) +
+    geom_rect(mapping = aes(xmin = 2018.55, xmax = 2022.45, ymin = -0.6, ymax = 0.16), fill = "#ceccc4", color = "white", alpha = 0.5) +
+    geom_rect(mapping = aes(xmin = 2014.55, xmax = 2018.45, ymin = -0.6, ymax = 0.16), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+    geom_rect(mapping = aes(xmin = 2010.55, xmax = 2014.45, ymin = -0.6, ymax = 0.16), fill = "#f6f6ed", color = "white", alpha = 0.5) +
+    geom_text(aes(x = 2012.5, y = -0.5, label = "Assessed under\nBerrios")) +
+    geom_text(aes(x = 2016.5, y = -0.5, label = "Assessed under\nBerrios")) +
+    geom_text(aes(x = 2020.5, y = -0.5, label = "Assessed under\nKaegi")) +
+    geom_ribbon(
+      aes(
+        ymin = -0.05, ymax = 0.05, x = (year - 2016) * (11.9 / 10) + 2016.5
+      ),
+      fill = "#49DEA4", alpha = 0.5
+    ) +
+    geom_text(aes(x = 2016.5, y = 0.01, label = "PRB Target")) +
+    geom_text(x = 2021.85, y = 0.06, hjust = .5, vjust = 0, label = "Progressive\nbias", size = 4) +
+    geom_segment(aes(x = 2021.85, y = .11, xend = 2021.85, yend = .14), arrow = arrow(length = unit(0.2, "cm")), linewidth = .75) +
+    
+    geom_text(x = 2021.85, y = -0.1, hjust = .5, vjust = 0, label = "Regressive\nbias", size = 4) +
+    geom_segment(aes(x = 2021.85, y = -.11, xend = 2021.85, yend = -.14), arrow = arrow(length = unit(0.2, "cm")), linewidth = .75) +
+    # geom_ribbon(aes(
+    #   ymin = lower, ymax = upper, x = year), 
+    #   color = alpha('#ffc425',.01), linewidth = 3
+    # ) +
+    geom_line(
+      aes(x = year, y = ln_value, color = "Coefficient of Price-Related Bias"), alpha = 1,
+      color = '#ffc425', lwd = 2
+    ) +
+    # scale_color_manual(values = "#ffc425") +
+    scale_y_continuous(name = "Coefficient of Price-Related Bias", limits = c(-0.6, 0.16), expand = c(0, 0)) +
+    scale_x_continuous(name = "Tax Year", breaks = c(2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021), expand = c(0.01, 0.01)) +
+    labs(
+      subtitle = "Coefficient of Price-Related Bias by Tax Year for residential properties",
+      captions = paste0(caption_3,prb_note)
+    ) +
+    theme_classic() +
+    theme(
+      legend.position = "bottom",
+      plot.subtitle = element_text(size = 13, hjust = .5, face = "bold", color = "#333333"),
+      plot.caption = element_text(size = 12, color = "#333333", hjust = 0),
+      axis.text = element_text(size = 11, color = "#333333"), axis.title = element_text(size = 14, color = "#333333"),
+      legend.text = element_text(size = 13, color = "#333333"),
+      legend.title = element_blank(),
+      strip.text = element_text(size = 13), strip.background = element_blank(),
+      plot.margin = margin(t = 15, r = 20, b = 10, l = 15)
+    ))
 
 # -------------------------------------------------------------------------
 
-path_dir <- "viz"
-
-ggsave(plot = cod_chart, filename = paste0(path_dir, "/10-cod_res.pdf"), width = 15, height = 8)
-ggsave(plot = prd_chart, filename = paste0(path_dir, "/11-prd_res.pdf"), width = 15, height = 8)
-ggsave(plot = prb_chart, filename = paste0(path_dir, "/12-prb_res.pdf"), width = 15, height = 8)
+ggsave(plot = cod_chart, filename = paste0("viz/10-cod_res.pdf"), width = 15, height = 8)
+ggsave(plot = prd_chart, filename = paste0("viz/11-prd_res.pdf"), width = 15, height = 8)
+ggsave(plot = prb_chart, filename = paste0("viz/12-prb_res.pdf"), width = 15, height = 8)
 
 # -------------------------------------------------------------------------
-## TEST
-
-# stats_ptax <- sales_ptax %>%
-#   filter(year >= 2011, reporting_group != "Condominium") %>%
-#   mutate(
-#     SALE_PRICE = sale_price,
-#     SALE_PRICE_ADJ = sale_price_hpi,
-#     ASSESSED_VALUE = av_board,
-#     ASSESSED_VALUE_ADJ = av_board_hpi,
-#     TAX_YEAR = year,
-#     SALE_YEAR = year,
-#     RATIO = av_ratio_board
-#   ) %>%
-#   # cmfproperty::calc_iaao_stats() %>%
-#   calc_iaao_stats() %>%
-#   mutate(year = Year) %>%
-#   mutate(cod = COD / 100) %>%
-#   mutate(prd = PRD) %>%
-#   mutate(ln_value = PRB)
-
-# ratios <- sales_ptax %>%
-#   filter(year >= 2011, reporting_group != "Condominium") %>%
-#   cmfproperty::reformat_data(
-#     .,
-#     sale_col = "sale_price",
-#     assessment_col = "av_board",
-#     sale_year_col = "year",
-#     filter_data = FALSE
-#   ) %>%
-#   mutate(ADJ_INDEX = SALE_PRICE_ADJ / SALE_PRICE)
-
-# stats_3 <- cmfproperty::calc_iaao_stats(ratios)
-
-# sum(ratios$SALE_YEAR != ratios$TAX_YEAR)
-# sum(ratios$ASSESSED_VALUE_ADJ/ratios$SALE_PRICE_ADJ == ratios$RATIO)
-# sum(ratios$RATIO != ratios$av_ratio_board)
-# sum(ratios$SALE_PRICE_ADJ != ratios$sale_price_hpi)
-
-# ratios %>%
-#   group_by(TAX_YEAR) %>%
-#   summarise(
-#     ADJ_INDEX = mean(ADJ_INDEX),
-#     hpi = mean(hpi),
-#   )
-
-# ratios %>%
-#   mutate(new_r = av_board_hpi/sale_price_hpi) %>%
-#   summarise(m = mean(new_r == av_ratio_board))
-
-
-# table(ratios$arms_length_transaction, ratios$av_ratio_5_to_95)
-
-# cmfproperty::make_report(ratios,
-#   jurisdiction_name = "Cook County, Illinois_adj_to_nm",
-#   output_dir = "~/Documents"
-# )
-
-# -------------------------------------------------------------------------
-
-
-
-library(tidycensus)
 
 bg_data <- get_acs(
   year = 2020, geography = "block group",
@@ -1538,6 +1640,83 @@ library(viridis)
 ggsave(plot = city_map, filename = paste0(path_dir, "/13-city_map.pdf"), width = 8, height = 7)
 ggsave(plot = north_map, filename = paste0(path_dir, "/14-north_av_ratio.pdf"), width = 11, height = 5)
 ggsave(plot = south_map, filename = paste0(path_dir, "/15-south_av_ratio.pdf"), width = 10, height = 8)
+
+
+
+# -------------------------------------------------------------------------
+
+# Methodological questions
+# https://docs.google.com/presentation/d/14OiOJM22-s2ggyydYCqhhO8BWVGHUvbYs9vRljP1qDA/edit#slide=id.p
+
+# 1) Should we restrict comparisons to each area's triennial assessment year?
+#    So compare the city in 2018 to 2021, northern subs in 2016 to 2019, southern subs in 2017 to 2020?
+# 2) Should we make comparisons between the previous years (t-1) sales and current years (t) assessment?
+#    The argument for doing this is b/c the current year model's training data goes up to Dec 31 of the previous year,
+#    so for instance the 2023 model is based on 2022 sales up to Dec 31. On the other hand, comparing
+#    2022 sales vs 2022 model provides insight into how well the model forecasts, and it eliminates the possibility of sales chasing,
+#    and bias from using in sample training data (if they are not producing out of sample scores for data included in the training data).
+# 3) Should exclude condos from the study (apparently they use a different assessment model and Berrios used to sales chase)?
+#    "Regression classes" are technically the only PINs that are subject to the automated valuation model.
+#    If we do include condos, both 299 + 399 are subject to the condo model, which we should compare separately.
+#    And the 300 level multifamily as well as 400s, 500s, 600s, 700s etc are handled by commercial valuation team (assuming we exclude).
+
+# -------------------------------------------------------------------------
+## TEST
+
+# stats_ptax <- sales_ptax %>%
+#   filter(year >= 2011, reporting_group != "Condominium") %>%
+#   mutate(
+#     SALE_PRICE = sale_price,
+#     SALE_PRICE_ADJ = sale_price_hpi,
+#     ASSESSED_VALUE = av_board,
+#     ASSESSED_VALUE_ADJ = av_board_hpi,
+#     TAX_YEAR = year,
+#     SALE_YEAR = year,
+#     RATIO = av_ratio_board
+#   ) %>%
+#   # cmfproperty::calc_iaao_stats() %>%
+#   calc_iaao_stats() %>%
+#   mutate(year = Year) %>%
+#   mutate(cod = COD / 100) %>%
+#   mutate(prd = PRD) %>%
+#   mutate(ln_value = PRB)
+
+# ratios <- sales_ptax %>%
+#   filter(year >= 2011, reporting_group != "Condominium") %>%
+#   cmfproperty::reformat_data(
+#     .,
+#     sale_col = "sale_price",
+#     assessment_col = "av_board",
+#     sale_year_col = "year",
+#     filter_data = FALSE
+#   ) %>%
+#   mutate(ADJ_INDEX = SALE_PRICE_ADJ / SALE_PRICE)
+
+# stats_3 <- cmfproperty::calc_iaao_stats(ratios)
+
+# sum(ratios$SALE_YEAR != ratios$TAX_YEAR)
+# sum(ratios$ASSESSED_VALUE_ADJ/ratios$SALE_PRICE_ADJ == ratios$RATIO)
+# sum(ratios$RATIO != ratios$av_ratio_board)
+# sum(ratios$SALE_PRICE_ADJ != ratios$sale_price_hpi)
+
+# ratios %>%
+#   group_by(TAX_YEAR) %>%
+#   summarise(
+#     ADJ_INDEX = mean(ADJ_INDEX),
+#     hpi = mean(hpi),
+#   )
+
+# ratios %>%
+#   mutate(new_r = av_board_hpi/sale_price_hpi) %>%
+#   summarise(m = mean(new_r == av_ratio_board))
+
+
+# table(ratios$arms_length_transaction, ratios$av_ratio_5_to_95)
+
+# cmfproperty::make_report(ratios,
+#   jurisdiction_name = "Cook County, Illinois_adj_to_nm",
+#   output_dir = "~/Documents"
+# )
 
 
 # # Race / ethnicity regions ------------------------------------------------
