@@ -287,7 +287,7 @@ sales_ptax <- sales_ptax %>%
       TRUE ~ as.character("Before 2015")
     ),
     assessor_term_year = paste0(assessor_term, " ", year),
-    reporting_group = factor(reporting_group, levels = c("Single-Family", "Multi-Family", "Condominium"))
+    reporting_group = factor(reporting_group, levels = c("Single-Family", "Multi-Family", "Condominium")) 
   )
 
 # Flag sales outliers  ----------------------------------------------------
@@ -362,7 +362,7 @@ sales_ptax_index <- sales_ptax_index %>%
        caption = paste0(
          "Note: Inflation adjusted to 2023 dollars using FHFA HPI Expanded-Data Index. Only including class codes: Single Family - 202, 203, 204, 205, 206, 207, 208,\n",
          "209, 210, 234, 278, 295. Multi Family - 212, 213. Condos - 299, 399. Within each reporting group, excludes sales more than 3 standard deviations away from\n",
-         "the mean, in the log prices.")) +
+         "the mean.")) +
   scale_x_continuous(name = "Tax Year", breaks = c(2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022), 
                      expand = c(0.01, .3)) +
   scale_y_continuous(limits = c(0,3.5), expand = c(0, 0)) +
@@ -378,6 +378,7 @@ sales_ptax_index <- sales_ptax_index %>%
         legend.position = 'bottom'))
 
 ggsave(plot = sales_trend, filename = paste0(viz_dir,"/10-0-sale-trends.pdf"), width = 13, height = 8)
+ggsave(plot = sales_trend, filename = paste0(viz_dir,"/10-0-sale-trends.png"), dpi =300, width = 13, height = 8)
 
 # December 2007 – June 2009
 # Captions for viz --------------------------------------------------------
@@ -387,7 +388,7 @@ caption_1 <- paste0(
   "interquartile range were excluded. Sale prices are inflation adjusted to 2023 dollars using the FHFA HPI. The above comparison only covers residential sales taking place in years for which its\n",
   "township underwent a re-assessment (e.g., 2018 or 2021 for the City, 2016 or 2022 for the North suburbs, and 2017 or 2020 for the South suburbs). Tax bills for a certain year are payable in\n",
   "the next year. The tax-bills sent out in the first year of a new administration, were partially or in whole subject to the methods of assessment of the older administration. \n",
-  "Class codes: Single Family - 202, 203, 204, 205, 206, 207, 208, 209, 210, 234, 278, 295. Multi Family - 212, 213. Condominumium - 299, 399."
+  "Class codes: Single Family - 202, 203, 204, 205, 206, 207, 208, 209, 210, 234, 278, 295. Multi Family - 212, 213. Condominium - 299, 399."
 )
 
 caption_2 <- paste0(
@@ -398,8 +399,7 @@ caption_2 <- paste0(
 
 caption_3 <- paste0(
   "Note: Tax bills for a certain year are payable in the next year. The tax-bills sent out in the first year of a new administration, were partially or in whole subject to the methods of assessment\n",
-  "of the older administration. Only including class codes: Single Family - 202, 203, 204, 205, 206, 207, 208, 209, 210, 234, 278, 295. Multi Family - 212, 213. Condos - 299, 399. Within\n",
-  "each reporting group, excludes sales more than 3 standard deviations away from the mean, in the log prices."
+  "of the older administration. Only including class codes: Single Family - 202, 203, 204, 205, 206, 207, 208, 209, 210, 234, 278, 295. Multi Family - 212, 213. Condominium - 299, 399."
 )
 
 caption_4 <- paste0(
@@ -1241,23 +1241,42 @@ year_triad <- tibble(
 
 # path_dir <- '/Users/nm/Desktop/Projects/work/cook-assessor/assessor-comp/Cook County 2023/viz'
 
-ggsave(plot = cook_comp_av, filename = paste0(viz_dir,"/1-cook_av_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = cook_comp_av_w_total, filename = paste0(viz_dir,"/1a-cook_av_w_total_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = city_comp_av, filename = paste0(viz_dir,"/2-city_av_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = city_comp_av_w_total, filename = paste0(viz_dir,"/2a-city_av_w_total_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = north_comp_av, filename = paste0(viz_dir,"/3-north_av_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = north_comp_av_w_total, filename = paste0(viz_dir,"/3a-north_av_w_total_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = south_comp_av, filename = paste0(viz_dir,"/4-south_av_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = south_comp_av_w_total, filename = paste0(viz_dir,"/4a-south_av_w_total_ratio.pdf"), width = 15, height = 8)
-ggsave(plot = bor_pre_post_chart, filename = paste0(viz_dir,"/5-bor_pre_post.pdf"), width = 14, height = 7)
-ggsave(plot = res_composition_chart, filename = paste0(viz_dir,"/6-res_composition.pdf"), width = 14, height = 7)
-ggsave(plot = res_composition_chart_abs, filename = paste0(viz_dir,"/6a-res_composition_abs.pdf"), width = 14, height = 7)
-ggsave(plot = com_composition_chart, filename = paste0(viz_dir,"/7-com_composition.pdf"), width = 14, height = 7)
-ggsave(plot = com_composition_chart_abs, filename = paste0(viz_dir,"/7a-com_composition_abs.pdf"), width = 14, height = 7)
-ggsave(plot = res_appeal_ratio_chart, filename = paste0(viz_dir,"/8-res_appeal_ratio.pdf"), width = 14, height = 7)
-ggsave(plot = res_appeal_triad_ratio_chart, filename = paste0(viz_dir,"/8a-res_appeal_ratio.pdf"), width = 14, height = 7)
-ggsave(plot = com_appeal_ratio_chart, filename = paste0(viz_dir,"/9-com_appeal_ratio.pdf"), width = 14, height = 7)
-ggsave(plot = com_appeal_triad_ratio_chart, filename = paste0(viz_dir,"/9a-com_appeal_ratio.pdf"), width = 14, height = 7)
+ggsave(plot = cook_comp_av, filename = paste0(viz_dir,"/01-cook_av_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = cook_comp_av_w_total, filename = paste0(viz_dir,"/01a-cook_av_w_total_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = city_comp_av, filename = paste0(viz_dir,"/02-city_av_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = city_comp_av_w_total, filename = paste0(viz_dir,"/02a-city_av_w_total_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = north_comp_av, filename = paste0(viz_dir,"/03-north_av_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = north_comp_av_w_total, filename = paste0(viz_dir,"/03a-north_av_w_total_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = south_comp_av, filename = paste0(viz_dir,"/04-south_av_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = south_comp_av_w_total, filename = paste0(viz_dir,"/04a-south_av_w_total_ratio.pdf"), width = 15, height = 8)
+ggsave(plot = bor_pre_post_chart, filename = paste0(viz_dir,"/05-bor_pre_post.pdf"), width = 14, height = 7)
+ggsave(plot = res_composition_chart, filename = paste0(viz_dir,"/06-res_composition.pdf"), width = 14, height = 7)
+ggsave(plot = res_composition_chart_abs, filename = paste0(viz_dir,"/06a-res_composition_abs.pdf"), width = 14, height = 7)
+ggsave(plot = com_composition_chart, filename = paste0(viz_dir,"/07-com_composition.pdf"), width = 14, height = 7)
+ggsave(plot = com_composition_chart_abs, filename = paste0(viz_dir,"/07a-com_composition_abs.pdf"), width = 14, height = 7)
+ggsave(plot = res_appeal_ratio_chart, filename = paste0(viz_dir,"/08-res_appeal_ratio.pdf"), width = 14, height = 7)
+ggsave(plot = res_appeal_triad_ratio_chart, filename = paste0(viz_dir,"/08a-res_appeal_ratio.pdf"), width = 14, height = 7)
+ggsave(plot = com_appeal_ratio_chart, filename = paste0(viz_dir,"/09-com_appeal_ratio.pdf"), width = 14, height = 7)
+ggsave(plot = com_appeal_triad_ratio_chart, filename = paste0(viz_dir,"/09a-com_appeal_ratio.pdf"), width = 14, height = 7)
+
+ggsave(plot = cook_comp_av, filename = paste0(viz_dir,"/01-cook_av_ratio.png"), dpi = 300, width = 15, height = 8)
+ggsave(plot = cook_comp_av_w_total, filename = paste0(viz_dir,"/01a-cook_av_w_total_ratio.png"), dpi = 300, width = 15, height = 8)
+ggsave(plot = city_comp_av, filename = paste0(viz_dir,"/02-city_av_ratio.png"), dpi = 300, width = 15, height = 8)
+ggsave(plot = city_comp_av_w_total, filename = paste0(viz_dir,"/02a-city_av_w_total_ratio.png"), dpi = 300, width = 15, height = 8)
+ggsave(plot = north_comp_av, filename = paste0(viz_dir,"/03-north_av_ratio.png"), dpi = 300, width = 15, height = 8)
+ggsave(plot = north_comp_av_w_total, filename = paste0(viz_dir,"/03a-north_av_w_total_ratio.png"), dpi = 300, width = 15, height = 8)
+ggsave(plot = south_comp_av, filename = paste0(viz_dir,"/04-south_av_ratio.png"), dpi = 300, width = 15, height = 8)
+ggsave(plot = south_comp_av_w_total, filename = paste0(viz_dir,"/04a-south_av_w_total_ratio.png"), dpi = 300, width = 15, height = 8)
+ggsave(plot = bor_pre_post_chart, filename = paste0(viz_dir,"/05-bor_pre_post.png"), dpi = 300, width = 14, height = 7)
+ggsave(plot = res_composition_chart, filename = paste0(viz_dir,"/06-res_composition.png"), dpi = 300, width = 14, height = 7)
+ggsave(plot = res_composition_chart_abs, filename = paste0(viz_dir,"/06a-res_composition_abs.png"), dpi = 300, width = 14, height = 7)
+ggsave(plot = com_composition_chart, filename = paste0(viz_dir,"/07-com_composition.png"), dpi = 300, width = 14, height = 7)
+ggsave(plot = com_composition_chart_abs, filename = paste0(viz_dir,"/07a-com_composition_abs.png"), dpi = 300, width = 14, height = 7)
+ggsave(plot = res_appeal_ratio_chart, filename = paste0(viz_dir,"/08-res_appeal_ratio.png"), dpi = 300, width = 14, height = 7)
+ggsave(plot = res_appeal_triad_ratio_chart, filename = paste0(viz_dir,"/08a-res_appeal_ratio.png"), dpi = 300, width = 14, height = 7)
+ggsave(plot = com_appeal_ratio_chart, filename = paste0(viz_dir,"/09-com_appeal_ratio.png"), dpi = 300, width = 14, height = 7)
+ggsave(plot = com_appeal_triad_ratio_chart, filename = paste0(viz_dir,"/09a-com_appeal_ratio.png"), dpi = 300, width = 14, height = 7)
+
 
 # Other metrics -----------------------------------------------------------
 
@@ -1355,6 +1374,8 @@ sales_ptax_cod <- sales_ptax %>%
 
 ggsave(plot = cod_chart, filename = paste0(viz_dir,"/10-cod_res.pdf"), width = 15, height = 9)
 
+ggsave(plot = cod_chart, filename = paste0(viz_dir,"/10-cod_res.png"), dpi =300, width = 15, height = 9)
+
 
 # Price-related differential ----------------------------------------------
 
@@ -1435,6 +1456,9 @@ sales_ptax_prd <- sales_ptax %>%
   ))
 
 ggsave(plot = prd_chart, filename = paste0(viz_dir,"/11-prd_res.pdf"), width = 15, height = 8)
+
+ggsave(plot = prd_chart, filename = paste0(viz_dir,"/11-prd_res.png"), dpi = 300, width = 15, height = 8)
+
 
 # Price-related bias ------------------------------------------------------
 
@@ -1558,15 +1582,57 @@ sales_ptax_prb_reg <- sales_ptax_prb_coeff %>%
     ))
 
 ggsave(plot = prb_chart, filename = paste0(viz_dir,"/12-prb_res.pdf"), width = 15, height = 8)
+
+ggsave(plot = prb_chart, filename = paste0(viz_dir,"/12-prb_res.png"), dpi = 300, width = 15, height = 8)
+
 # -------------------------------------------------------------------------
 
+bg_race <- get_acs(year = 2022, geography = "block group", 
+                      survey = 'acs5', variables = c('B03002_012', 'B03002_003', 'B03002_004', 'B03002_005', 'B03002_006', 'B03002_007', 'B03002_008', 'B03002_009'),
+                      summary_var = 'B03002_001', 
+                      cache_table = TRUE, 
+                      state = '17', county = '031',
+                      geometry = FALSE) 
 
+bg_race <- bg_race  %>% 
+  rename_all(list(tolower)) %>%
+  mutate(race = case_when(variable == 'B03002_012' ~ 'Latino/a',
+                          variable == 'B03002_003' ~ 'White',
+                          variable == 'B03002_004' ~ 'Black',
+                          variable == 'B03002_005' ~ 'Native American',
+                          variable == 'B03002_006' ~ 'Asian/Pacific Islander',
+                          variable == 'B03002_007' ~ 'Asian/Pacific Islander',
+                          variable == 'B03002_008' ~ 'Multiracial/Other',
+                          variable == 'B03002_009' ~ 'Multiracial/Other',
+                          TRUE ~ as.character(''))) %>%
+  group_by(geoid, race, summary_est) %>% 
+  summarize_at(.vars = vars(estimate), .funs = list(sum)) %>%
+  ungroup() 
+
+bg_race_wide  <- bg_race  %>%
+  mutate(shr = estimate/summary_est) %>%
+  pivot_wider(names_from = race,
+              values_from = c(shr,estimate)) %>%
+  rename_all(list(tolower)) %>%
+  select_all(~gsub("\\s+|\\.|\\/", "_", .)) 
+
+bg_race_plurality <- bg_race  %>%
+  mutate(plurality_race_share = estimate/summary_est) %>%
+  group_by(geoid) %>%
+  mutate(plurality_rank = row_number(desc(plurality_race_share))) %>%
+  ungroup() %>%
+  filter(estimate > 0) %>%
+  select(geoid, race, estimate, plurality_race_share, plurality_rank) %>%
+  rename(plurality_race_population = estimate,
+         plurality_race = race) %>%
+  filter(plurality_rank == 1) %>%
+  select(geoid, plurality_race, plurality_race_population, plurality_race_share) 
 
 
 # Maps of AV ratios -------------------------------------------------------
 
 bg_data <- get_acs(
-  year = 2020, geography = "block group",
+  year = 2022, geography = "block group",
   survey = "acs5", variables = c("B19013_001"),
   cache_table = TRUE,
   state = "17", county = "031",
@@ -1621,6 +1687,16 @@ sales_ptax_bg <- sales_ptax %>%
 sales_ptax_bg <- bg_data %>%
   left_join(., sales_ptax_bg, by = c("geoid" = "geoid"))
 
+sales_ptax_bg <- sales_ptax_bg %>%
+  left_join(., bg_race_plurality, by = c('geoid'='geoid'))
+
+bg_data_plurality <- bg_data %>%
+  left_join(., bg_race_plurality, by = c('geoid'='geoid'))
+  
+cityfips <- sales_ptax_bg %>% st_drop_geometry() %>% filter(triad_name == "City") %>% select(geoid) %>% pull()
+northfips <- sales_ptax_bg %>% st_drop_geometry() %>% filter(triad_name == "North") %>% select(geoid) %>% pull()
+southfips <- sales_ptax_bg %>% st_drop_geometry() %>% filter(triad_name == "South") %>% select(geoid) %>% pull()
+
 (city_map <- ggplot() +
   geom_sf(
     data = sales_ptax_bg %>% filter(assessor_term == "Berrios", triad_name == "City"),
@@ -1645,8 +1721,7 @@ sales_ptax_bg <- bg_data %>%
     legend.title = element_blank(),
     plot.title = element_text(hjust = .5, face = "bold"),
     plot.subtitle = element_text(hjust = .5)
-  ))
-
+  ) )
 
 (north_map <- ggplot() +
   geom_sf(
@@ -1673,7 +1748,6 @@ sales_ptax_bg <- bg_data %>%
     plot.title = element_text(hjust = .5, face = "bold"),
     plot.subtitle = element_text(hjust = .5)
   ))
-
 
 (south_map <- ggplot() +
   geom_sf(
@@ -1702,9 +1776,59 @@ sales_ptax_bg <- bg_data %>%
   ))
 
 
-ggsave(plot = city_map, filename = paste0(viz_dir,"/13-city_map.pdf"), width = 8, height = 7)
+ggsave(plot = city_map, filename = paste0(viz_dir,"/13-city_av_ratio.pdf"), width = 8, height = 7)
 ggsave(plot = north_map, filename = paste0(viz_dir,"/14-north_av_ratio.pdf"), width = 11, height = 5)
 ggsave(plot = south_map, filename = paste0(viz_dir,"/15-south_av_ratio.pdf"), width = 10, height = 8)
+
+ggsave(plot = city_map, filename = paste0(viz_dir,"/13-city_av_ratio.png"), dpi = 300, width = 8, height = 7)
+ggsave(plot = north_map, filename = paste0(viz_dir,"/14-north_av_ratio.png"), dpi = 300,width = 11, height = 5)
+ggsave(plot = south_map, filename = paste0(viz_dir,"/15-south_av_ratio.png"), dpi = 300,width = 10, height = 8)
+
+
+(cityrace <- ggplot() +
+  geom_sf(
+    data = bg_data_plurality %>% filter(!is.na(plurality_race)) %>%
+      filter(geoid %in% cityfips),
+    aes(fill = plurality_race), 
+    color = "white", linewidth = .05
+  ) +
+  labs(subtitle = "") +
+  scale_fill_manual(values = c('#845EC2','#4D96FF','#6BCB77','#FFD93D','#FF6B6B'), name = 'Plurality race') +
+  #scale_alpha_manual(values = c('#4D96FF','#6BCB77','#FFD93D','#FF6B6B'), name = 'Plurality race') +
+  theme_void() )
+
+(northrace <- ggplot() +
+  geom_sf(
+    data = bg_data_plurality %>% filter(!is.na(plurality_race)) %>%
+      filter(geoid %in% northfips),
+    aes(fill = plurality_race), 
+    color = "white", linewidth = .05
+  ) +
+  labs(subtitle = "") +
+  scale_fill_manual(values = c('#845EC2','#4D96FF','#6BCB77','#FFD93D','#FF6B6B'), name = 'Plurality race') +
+  #scale_alpha_manual(values = c('#4D96FF','#6BCB77','#FFD93D','#FF6B6B'), name = 'Plurality race') +
+  theme_void() )
+
+(southrace <- ggplot() +
+  geom_sf(
+    data = bg_data_plurality %>% filter(!is.na(plurality_race)) %>%
+      filter(geoid %in% southfips),
+    aes(fill = plurality_race), 
+    color = "white", linewidth = .05
+  ) +
+  labs(subtitle = "") +
+  scale_fill_manual(values = c('#845EC2','#4D96FF','#6BCB77','#FFD93D','#FF6B6B'), name = 'Plurality race') +
+  #scale_alpha_manual(values = c('#4D96FF','#6BCB77','#FFD93D','#FF6B6B'), name = 'Plurality race') +
+  theme_void() )
+
+ggsave(plot = cityrace, filename = paste0(viz_dir,"/13r-city_race.pdf"), width = 8, height = 7)
+ggsave(plot = northrace, filename = paste0(viz_dir,"/14r-north_race.pdf"), width = 11, height = 5)
+ggsave(plot = southrace, filename = paste0(viz_dir,"/15r-south_race.pdf"), width = 10, height = 8)
+
+ggsave(plot = cityrace, filename = paste0(viz_dir,"/13r-city_race.png"), dpi = 300, width = 8, height = 7)
+ggsave(plot = northrace, filename = paste0(viz_dir,"/14r-north_race.png"), dpi = 300, width = 11, height = 5)
+ggsave(plot = southrace, filename = paste0(viz_dir,"/15r-south_race.png"), dpi = 300, width = 10, height = 8)
+
 
 # -------------------------------------------------------------------------
 
